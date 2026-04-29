@@ -100,3 +100,42 @@ def validate_max_rows(rows: list[CsvRow], max_csv_rows: int) -> list[ValidationP
             offending_paths=tuple(r.path for r in marked),
         )]
     return []
+
+
+def validate_paths_and_hashes(
+    client: dropbox.Dropbox,
+    rows: list[CsvRow],
+) -> list[ValidationProblem]:
+    """Validations A + D: for each row marked for delete, the path must still
+    exist in Dropbox AND its content_hash must match the CSV (no edits since scan).
+    Combined into one Dropbox call per row."""
+    missing: list[str] = []
+    changed: list[str] = []
+    for row in rows:
+        if not row.marked_delete:
+            continue
+        try:
+            meta = with_retry(lambda r=row: client.files_get_metadata(r.path))
+        except ApiError:
+            missing.append(row.path)
+            continue
+        if getattr(meta, "content_hash", None) != row.content_hash:
+            changed.append(row.path)
+
+    problems: list[ValidationProblem] = []
+    if missing:
+        problems.append(ValidationProblem(
+            code="PATH_NOT_FOUND",
+            message=(f"{len(missing)} path(s) marked for delete no longer exist "
+                     "in Dropbox. Re-run find_duplicates.py to refresh the CSV."),
+            offending_paths=tuple(missing),
+        ))
+    if changed:
+        problems.append(ValidationProblem(
+            code="HASH_CHANGED",
+            message=(f"{len(changed)} file(s) have changed since the scan "
+                     "(content_hash differs). Re-run find_duplicates.py to refresh "
+                     "the CSV."),
+            offending_paths=tuple(changed),
+        ))
+    return problems

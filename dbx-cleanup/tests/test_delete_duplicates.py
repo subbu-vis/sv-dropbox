@@ -1,8 +1,12 @@
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
-from delete_duplicates import CsvRow, ValidationProblem, parse_csv, validate_groups_have_survivor, validate_max_rows
+from dropbox.exceptions import ApiError
+from dropbox.files import FileMetadata
+
+from delete_duplicates import CsvRow, ValidationProblem, parse_csv, validate_groups_have_survivor, validate_max_rows, validate_paths_and_hashes
 
 
 def write_csv(tmp_path: Path, body: str) -> Path:
@@ -123,3 +127,41 @@ def test_validate_max_rows_flags_overage() -> None:
     assert len(problems) == 1
     assert problems[0].code == "EXCEEDS_MAX_ROWS"
     assert "101" in problems[0].message
+
+
+def fake_metadata(path: str, content_hash: str) -> FileMetadata:
+    m = MagicMock(spec=FileMetadata)
+    m.path_display = path
+    m.content_hash = content_hash
+    return m
+
+
+def test_validate_paths_and_hashes_all_good() -> None:
+    rows = [make_row(1, "/a", True, h="h1"), make_row(1, "/b", False, h="h1")]
+    client = MagicMock()
+    client.files_get_metadata.side_effect = lambda p: fake_metadata(p, "h1")
+    problems = validate_paths_and_hashes(client, rows)
+    assert problems == []
+    # only checks marked rows
+    client.files_get_metadata.assert_called_once_with("/a")
+
+
+def test_validate_paths_and_hashes_missing_path() -> None:
+    rows = [make_row(1, "/gone", True, h="h1"), make_row(1, "/b", False, h="h1")]
+    client = MagicMock()
+    err = ApiError("req-id", MagicMock(), "user-msg", "")
+    client.files_get_metadata.side_effect = err
+    problems = validate_paths_and_hashes(client, rows)
+    assert len(problems) == 1
+    assert problems[0].code == "PATH_NOT_FOUND"
+    assert "/gone" in problems[0].offending_paths
+
+
+def test_validate_paths_and_hashes_changed_hash() -> None:
+    rows = [make_row(1, "/a", True, h="h1"), make_row(1, "/b", False, h="h1")]
+    client = MagicMock()
+    client.files_get_metadata.side_effect = lambda p: fake_metadata(p, "h_NEW")
+    problems = validate_paths_and_hashes(client, rows)
+    assert len(problems) == 1
+    assert problems[0].code == "HASH_CHANGED"
+    assert "/a" in problems[0].offending_paths
