@@ -123,6 +123,38 @@ def test_should_skip_file_honors_ignored_folders(path: str, expected_skip: bool)
     ) is expected_skip
 
 
+@pytest.mark.parametrize(
+    "path, expected_skip",
+    [
+        # ignoring /folder1/subfolder2 only affects that subtree
+        ("/folder1/subfolder2/file.txt", True),
+        ("/folder1/subfolder2/deep/nested/x.txt", True),
+        # parent and siblings are untouched
+        ("/folder1/file.txt", False),
+        ("/folder1/subfolder1/file.txt", False),
+        ("/folder1/subfolder3/file.txt", False),
+        # different top-level folder
+        ("/elsewhere/file.txt", False),
+    ],
+)
+def test_ignored_folders_handles_nested_paths(path: str, expected_skip: bool) -> None:
+    meta = FakeMeta(
+        name=path.rsplit("/", 1)[-1],
+        path_display=path,
+        size=200_000,
+        content_hash="h",
+        server_modified="2024-01-01T00:00:00Z",
+    )
+    assert should_skip_file(
+        meta,
+        min_file_size_bytes=100_000,
+        skip_hidden=True,
+        skip_shared_not_owned=True,
+        owner_account_id="self",
+        ignored_folders=("/folder1/subfolder2",),
+    ) is expected_skip
+
+
 def make_entry(name: str, path: str, size: int, h: str) -> FileEntry:
     return FileEntry(name=name, path=path, size=size, content_hash=h,
                      server_modified="2024-01-01T00:00:00Z")
