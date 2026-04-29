@@ -6,7 +6,7 @@ import pytest
 from dropbox.exceptions import ApiError
 from dropbox.files import FileMetadata
 
-from delete_duplicates import CsvRow, ValidationProblem, parse_csv, validate_groups_have_survivor, validate_max_rows, validate_paths_and_hashes
+from delete_duplicates import CsvRow, ValidationProblem, execute_deletes, parse_csv, validate_groups_have_survivor, validate_max_rows, validate_paths_and_hashes, write_error_log
 
 
 def write_csv(tmp_path: Path, body: str) -> Path:
@@ -165,3 +165,41 @@ def test_validate_paths_and_hashes_changed_hash() -> None:
     assert len(problems) == 1
     assert problems[0].code == "HASH_CHANGED"
     assert "/a" in problems[0].offending_paths
+
+
+def test_write_error_log_lists_all_problems(tmp_path: Path) -> None:
+    problems = [
+        ValidationProblem("GROUP_FULLY_MARKED", "Group 1 fully marked", ("/a", "/b")),
+        ValidationProblem("PATH_NOT_FOUND", "1 missing", ("/gone",)),
+    ]
+    log_path = tmp_path / "error.log"
+    write_error_log(problems, log_path)
+    text = log_path.read_text()
+    assert "GROUP_FULLY_MARKED" in text
+    assert "PATH_NOT_FOUND" in text
+    assert "/a" in text
+    assert "/b" in text
+    assert "/gone" in text
+
+
+def test_execute_deletes_continues_on_error(tmp_path: Path) -> None:
+    rows_to_delete = [make_row(1, "/a", True), make_row(1, "/b", True),
+                      make_row(2, "/c", True)]
+    client = MagicMock()
+    # /b raises an ApiError; /a and /c succeed
+    def fake_delete(path: str):
+        if path == "/b":
+            raise ApiError("req-id", MagicMock(), "boom", "")
+        return MagicMock(metadata=MagicMock(path_display=path))
+    client.files_delete_v2.side_effect = fake_delete
+
+    log_path = tmp_path / "delete-log.csv"
+    summary = execute_deletes(client, rows_to_delete, log_path)
+    assert summary.success_count == 2
+    assert summary.error_count == 1
+
+    log_text = log_path.read_text()
+    # CSV header + 3 rows
+    assert log_text.count("\n") >= 4
+    assert "/a" in log_text and "/b" in log_text and "/c" in log_text
+    assert "deleted" in log_text and "error" in log_text

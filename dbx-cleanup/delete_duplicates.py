@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Any
 
 import dropbox
-from dropbox.exceptions import ApiError, DropboxException
+from dropbox.exceptions import ApiError, AuthError, DropboxException
 
-from dbx_client import Config, get_client, load_config, load_token, with_retry
+from dbx_client import Config, MissingTokenError, get_client, load_config, load_token, with_retry
 
 
 @dataclass(frozen=True)
@@ -139,3 +139,130 @@ def validate_paths_and_hashes(
             offending_paths=tuple(changed),
         ))
     return problems
+
+
+@dataclass(frozen=True)
+class ExecutionSummary:
+    success_count: int
+    error_count: int
+    log_path: Path
+
+
+AUDIT_HEADER = ["timestamp", "path", "size_bytes", "content_hash", "status",
+                "dropbox_response"]
+
+
+def write_error_log(problems: list[ValidationProblem], log_path: Path) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("w") as f:
+        f.write(f"Pre-flight validation failed at {datetime.now().isoformat()}\n")
+        f.write("No deletions were performed.\n\n")
+        for p in problems:
+            f.write(f"[{p.code}] {p.message}\n")
+            for path in p.offending_paths:
+                f.write(f"  - {path}\n")
+            f.write("\n")
+
+
+def execute_deletes(
+    client: dropbox.Dropbox,
+    rows: list[CsvRow],
+    log_path: Path,
+) -> ExecutionSummary:
+    """Move each row's path to the Dropbox recycle bin via files_delete_v2.
+    Continues on per-file errors. Writes one audit-log row per attempt."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    success = 0
+    errors = 0
+    with log_path.open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(AUDIT_HEADER)
+        for row in rows:
+            ts = datetime.now().isoformat()
+            try:
+                resp = with_retry(lambda r=row: client.files_delete_v2(r.path))
+                # files_delete_v2 returns a DeleteResult with .metadata of the deleted entry,
+                # confirming Dropbox accepted and moved the file to deleted-files (recycle bin).
+                deleted_path = getattr(resp.metadata, "path_display", row.path)
+                writer.writerow([ts, row.path, row.size_bytes, row.content_hash,
+                                 "deleted", f"moved to recycle bin: {deleted_path}"])
+                success += 1
+                print(f"  deleted: {row.path}")
+            except DropboxException as exc:
+                # ApiError, RateLimitError (after retries exhausted), AuthError, etc.
+                writer.writerow([ts, row.path, row.size_bytes, row.content_hash,
+                                 "error", str(exc)])
+                errors += 1
+                print(f"  ERROR  : {row.path} ({exc})")
+    return ExecutionSummary(success_count=success, error_count=errors, log_path=log_path)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Delete user-flagged Dropbox duplicates.")
+    parser.add_argument("--config", default="config.ini")
+    parser.add_argument("--csv", required=True, help="Path to user-edited CSV.")
+    args = parser.parse_args()
+
+    try:
+        config = load_config(Path(args.config))
+        token = load_token()
+        client = get_client(token)
+    except FileNotFoundError as exc:
+        print(f"Config error: {exc}", file=sys.stderr)
+        return 1
+    except MissingTokenError as exc:
+        print(f"Token error: {exc}", file=sys.stderr)
+        return 1
+    except AuthError as exc:
+        print(f"Dropbox auth failed: {exc}. See README for token regeneration.",
+              file=sys.stderr)
+        return 1
+
+    try:
+        rows = parse_csv(Path(args.csv))
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"CSV error: {exc}", file=sys.stderr)
+        return 1
+
+    marked_count = sum(1 for r in rows if r.marked_delete)
+    if marked_count == 0:
+        print("No rows marked with 'x' in the delete column. Nothing to do.")
+        return 0
+
+    print(f"Pre-flight validation on {len(rows)} rows ({marked_count} marked for delete)...")
+    problems: list[ValidationProblem] = []
+    problems.extend(validate_groups_have_survivor(rows))
+    problems.extend(validate_max_rows(rows, config.max_csv_rows))
+    problems.extend(validate_paths_and_hashes(client, rows))
+
+    if problems:
+        ts = datetime.now().strftime("%Y-%m-%d-%H%M")
+        log_path = config.log_dir / f"error-{ts}.log"
+        write_error_log(problems, log_path)
+        print(f"\nValidation failed with {len(problems)} problem(s). "
+              f"See {log_path}")
+        for p in problems:
+            print(f"  [{p.code}] {p.message}")
+        return 2
+
+    print("All validations passed.")
+    confirmation = input(
+        f"\nAbout to move {marked_count} file(s) to Dropbox recycle bin. "
+        "Type 'yes' to proceed: "
+    )
+    if confirmation.strip() != "yes":
+        print("Aborted by user.")
+        return 1
+
+    rows_to_delete = [r for r in rows if r.marked_delete]
+    ts = datetime.now().strftime("%Y-%m-%d-%H%M")
+    audit_path = config.log_dir / f"delete-log-{ts}.csv"
+    summary = execute_deletes(client, rows_to_delete, audit_path)
+
+    print(f"\nDone. Deleted: {summary.success_count}, Errors: {summary.error_count}")
+    print(f"Audit log: {summary.log_path}")
+    return 0 if summary.error_count == 0 else 3
+
+
+if __name__ == "__main__":
+    sys.exit(main())
