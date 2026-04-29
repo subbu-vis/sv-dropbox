@@ -153,6 +153,39 @@ def test_group_by_hash_empty_input_returns_empty() -> None:
     assert group_by_hash([]) == {}
 
 
+def test_write_csv_empty_groups_writes_header_only(tmp_path: Path) -> None:
+    out_path = tmp_path / "empty.csv"
+    write_csv([], out_path)
+    assert out_path.read_text().strip() == \
+        "group_id,filename,size_bytes,path,content_hash,last_modified,delete"
+
+
+def test_write_csv_single_group_has_no_trailing_blank(tmp_path: Path) -> None:
+    groups = [
+        [
+            make_entry("a.txt", "/A/a.txt", 1000, "h1"),
+            make_entry("a.txt", "/B/a.txt", 1000, "h1"),
+        ],
+    ]
+    out_path = tmp_path / "one.csv"
+    write_csv(groups, out_path)
+    lines = out_path.read_text().splitlines()
+    assert len(lines) == 3  # header + 2 rows, no trailing blank
+
+
+def test_write_csv_sorts_paths_case_insensitively(tmp_path: Path) -> None:
+    groups = [[
+        make_entry("a.txt", "/B/a.txt", 1000, "h1"),
+        make_entry("a.txt", "/a/a.txt", 1000, "h1"),
+        make_entry("a.txt", "/C/a.txt", 1000, "h1"),
+    ]]
+    out_path = tmp_path / "case.csv"
+    write_csv(groups, out_path)
+    lines = out_path.read_text().splitlines()
+    paths_in_order = [line.split(",")[3] for line in lines[1:]]
+    assert paths_in_order == ["/a/a.txt", "/B/a.txt", "/C/a.txt"]
+
+
 def test_write_csv_columns_and_blank_rows_between_groups(tmp_path: Path) -> None:
     groups = [
         [

@@ -90,12 +90,17 @@ CSV_HEADER = ["group_id", "filename", "size_bytes", "path", "content_hash",
 
 
 def write_csv(groups: list[list[FileEntry]], out_path: Path) -> None:
+    """Write `groups` as a CSV at `out_path`. Header row + one row per FileEntry,
+    with a blank row separator between groups. `delete` column is empty for the
+    user to fill in. Empty `groups` produces a header-only file."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(CSV_HEADER)
         for idx, group in enumerate(groups, start=1):
-            for entry in sorted(group, key=lambda e: e.path):
+            # Case-fold the sort key so siblings with mixed-case parent folders
+            # (Dropbox is case-insensitive) appear adjacent.
+            for entry in sorted(group, key=lambda e: e.path.lower()):
                 writer.writerow([
                     idx, entry.name, entry.size, entry.path,
                     entry.content_hash, entry.server_modified, "",
