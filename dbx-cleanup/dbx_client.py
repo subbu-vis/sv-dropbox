@@ -9,6 +9,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
+import dropbox
+from dotenv import load_dotenv
+
 T = TypeVar("T")
 
 
@@ -41,9 +44,6 @@ def load_config(path: Path) -> Config:
     )
 
 
-from dotenv import load_dotenv
-
-
 class MissingTokenError(RuntimeError):
     """Raised when the Dropbox access token is missing or empty."""
 
@@ -61,9 +61,6 @@ def load_token(env_path: Path | None = None) -> str:
             "in the Dropbox App Console and add it to .env."
         )
     return token
-
-
-import dropbox
 
 
 def get_client(token: str) -> dropbox.Dropbox:
