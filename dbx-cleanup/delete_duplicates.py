@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -149,6 +150,7 @@ def validate_paths_and_hashes(
 class ExecutionSummary:
     success_count: int
     error_count: int
+    bytes_freed: int  # sum of size_bytes for successfully-deleted rows
     log_path: Path
 
 
@@ -178,6 +180,7 @@ def execute_deletes(
     log_path.parent.mkdir(parents=True, exist_ok=True)
     success = 0
     errors = 0
+    bytes_freed = 0
     with log_path.open("w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(AUDIT_HEADER)
@@ -191,6 +194,7 @@ def execute_deletes(
                 writer.writerow([ts, row.path, row.size_bytes, row.content_hash,
                                  "deleted", f"moved to recycle bin: {deleted_path}"])
                 success += 1
+                bytes_freed += row.size_bytes
                 print(f"  deleted: {row.path}")
             except AuthError:
                 # Token expired/invalid mid-batch. Don't log 100 "errors" — fail
@@ -203,7 +207,8 @@ def execute_deletes(
                                  "error", str(exc)])
                 errors += 1
                 print(f"  ERROR  : {row.path} ({exc})")
-    return ExecutionSummary(success_count=success, error_count=errors, log_path=log_path)
+    return ExecutionSummary(success_count=success, error_count=errors,
+                             bytes_freed=bytes_freed, log_path=log_path)
 
 
 def main() -> int:
@@ -275,7 +280,10 @@ def main() -> int:
               file=sys.stderr)
         return 1
 
-    print(f"\nDone. Deleted: {summary.success_count}, Errors: {summary.error_count}")
+    # Round bytes freed up to MB so even small batches show > 0 MB.
+    mb_freed = math.ceil(summary.bytes_freed / (1024 * 1024))
+    print(f"\nDone. Deleted: {summary.success_count}, Errors: {summary.error_count}, "
+          f"Space freed: {mb_freed} MB")
     print(f"Audit log: {summary.log_path}")
     return 0 if summary.error_count == 0 else 3
 

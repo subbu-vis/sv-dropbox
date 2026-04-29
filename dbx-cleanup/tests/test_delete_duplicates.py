@@ -216,6 +216,8 @@ def test_execute_deletes_continues_on_error(tmp_path: Path) -> None:
     summary = execute_deletes(client, rows_to_delete, log_path)
     assert summary.success_count == 2
     assert summary.error_count == 1
+    # /a (1000) + /c (1000) succeeded; /b errored. Bytes freed = sum of successes.
+    assert summary.bytes_freed == 2000
 
     log_text = log_path.read_text()
     # CSV header + 3 rows
