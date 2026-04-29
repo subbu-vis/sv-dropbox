@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import argparse
 import csv
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
+
+import dropbox
+from dropbox.files import FileMetadata, ListFolderResult
+
+from dbx_client import Config, get_client, load_config, load_token, with_retry
 
 
 @dataclass(frozen=True)
@@ -108,3 +115,96 @@ def write_csv(groups: list[list[FileEntry]], out_path: Path) -> None:
             # blank row between groups (but not after the last one)
             if idx < len(groups):
                 writer.writerow([])
+
+
+def scan_dropbox(
+    client: dropbox.Dropbox,
+    root: str,
+    config: Config,
+    owner_account_id: str,
+) -> list[FileEntry]:
+    """Walk Dropbox starting at `root`, applying skip rules, returning kept entries.
+    Stops scanning when running totals indicate >= early_exit_row_threshold
+    duplicate rows have been found."""
+    kept: list[FileEntry] = []
+    files_scanned = 0
+
+    # Dropbox's recursive list returns from the given root. "/" is special-cased to "".
+    list_path = "" if root == "/" else root.rstrip("/")
+
+    result: ListFolderResult = with_retry(
+        lambda: client.files_list_folder(list_path, recursive=True)
+    )
+    while True:
+        for entry in result.entries:
+            if not isinstance(entry, FileMetadata):
+                continue
+            files_scanned += 1
+            if should_skip_file(
+                entry,
+                min_file_size_bytes=config.min_file_size_bytes,
+                skip_hidden=config.skip_hidden,
+                skip_shared_not_owned=config.skip_shared_not_owned,
+                owner_account_id=owner_account_id,
+            ):
+                continue
+            kept.append(FileEntry(
+                name=entry.name,
+                path=entry.path_display,
+                size=entry.size,
+                content_hash=entry.content_hash,
+                server_modified=entry.server_modified.isoformat(),
+            ))
+
+            if files_scanned % 1000 == 0:
+                dup_rows = sum(len(g) for g in group_by_hash(kept).values())
+                print(f"Scanned {files_scanned} files, "
+                      f"{len(group_by_hash(kept))} duplicate groups "
+                      f"({dup_rows} rows)...")
+                if dup_rows >= config.early_exit_row_threshold:
+                    print(f"Hit early-exit threshold ({config.early_exit_row_threshold}); "
+                          "stopping scan.")
+                    return kept
+
+        if not result.has_more:
+            break
+        next_cursor = result.cursor
+        result = with_retry(lambda c=next_cursor: client.files_list_folder_continue(c))
+
+    print(f"Scan complete. Total files scanned: {files_scanned}.")
+    return kept
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Find Dropbox duplicates.")
+    parser.add_argument("--config", default="config.ini",
+                        help="Path to config.ini (default: config.ini)")
+    parser.add_argument("--root", default="/",
+                        help="Dropbox path to scan (default: /)")
+    args = parser.parse_args()
+
+    config = load_config(Path(args.config))
+    token = load_token()
+    client = get_client(token)
+    owner = client.users_get_current_account().account_id
+
+    entries = scan_dropbox(client, args.root, config, owner)
+    groups = group_by_hash(entries)
+    selected = select_top_groups(groups, config.max_csv_rows)
+
+    timestamp = datetime.now().strftime("%Y-%m-%d-%H%M")
+    out_path = config.csv_output_dir / f"duplicates-{timestamp}.csv"
+    write_csv(selected, out_path)
+
+    total_rows = sum(len(g) for g in selected)
+    total_wasted = sum(_wasted_bytes(g) for g in selected)
+    print(f"\nWrote {len(selected)} groups, {total_rows} rows to {out_path}")
+    print(f"Total wasted space across selected groups: {total_wasted:,} bytes "
+          f"({total_wasted / 1024 / 1024:.2f} MB)")
+    print("Mark 'x' in the delete column for files to remove, then run:")
+    print(f"  python delete_duplicates.py --csv {out_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
