@@ -1,8 +1,11 @@
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
-from dbx_client import load_config
+from dropbox.exceptions import AuthError, RateLimitError
+
+from dbx_client import load_config, MissingTokenError, load_token, with_retry
 
 
 def test_load_config_reads_scan_and_paths(tmp_path: Path) -> None:
@@ -37,9 +40,6 @@ def test_load_config_missing_file_raises(tmp_path: Path) -> None:
         load_config(missing)
 
 
-from dbx_client import MissingTokenError, load_token
-
-
 def test_load_token_returns_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text("DROPBOX_ACCESS_TOKEN=sl.test123\n")
@@ -59,3 +59,35 @@ def test_load_token_missing_raises_with_helpful_message(
         load_token(env_file)
     assert "DROPBOX_ACCESS_TOKEN" in str(excinfo.value)
     assert "README" in str(excinfo.value)
+
+
+def _rate_limit_error(backoff: float) -> RateLimitError:
+    """RateLimitError(request_id, error, backoff) — backoff is seconds to wait."""
+    return RateLimitError("req-id", MagicMock(), backoff)
+
+
+def test_with_retry_retries_on_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    sleep_calls: list[float] = []
+    monkeypatch.setattr("dbx_client.time.sleep", lambda s: sleep_calls.append(s))
+
+    call = MagicMock()
+    call.side_effect = [_rate_limit_error(2.0), "ok"]
+    result = with_retry(call)
+    assert result == "ok"
+    assert sleep_calls == [2.0]
+
+
+def test_with_retry_gives_up_after_max_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("dbx_client.time.sleep", lambda s: None)
+    call = MagicMock()
+    call.side_effect = _rate_limit_error(1.0)
+    with pytest.raises(RateLimitError):
+        with_retry(call, max_attempts=3)
+    assert call.call_count == 3
+
+
+def test_with_retry_does_not_retry_auth_error() -> None:
+    call = MagicMock(side_effect=AuthError("req-id", "user-message"))
+    with pytest.raises(AuthError):
+        with_retry(call)
+    assert call.call_count == 1

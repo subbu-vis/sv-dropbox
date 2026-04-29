@@ -11,6 +11,7 @@ from typing import Any, Callable, TypeVar
 
 import dropbox
 from dotenv import load_dotenv
+from dropbox.exceptions import AuthError, RateLimitError
 
 T = TypeVar("T")
 
@@ -69,3 +70,23 @@ def get_client(token: str) -> dropbox.Dropbox:
     account = client.users_get_current_account()
     print(f"Connected to Dropbox as {account.email}")
     return client
+
+
+def with_retry(call: Callable[[], T], max_attempts: int = 3) -> T:
+    """Run `call` with retry on RateLimitError. AuthError is re-raised immediately.
+
+    The dropbox SDK puts the server-recommended retry delay on RateLimitError.backoff
+    (seconds). We honor that; default to 1s if absent."""
+    last_error: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return call()
+        except RateLimitError as exc:
+            last_error = exc
+            backoff = getattr(exc, "backoff", None) or 1
+            print(f"Rate limited (attempt {attempt}/{max_attempts}); sleeping {backoff}s")
+            time.sleep(backoff)
+        except AuthError:
+            raise
+    assert last_error is not None
+    raise last_error
