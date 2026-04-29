@@ -20,3 +20,6 @@ venv/
 # script outputs (generated at runtime)
 dbx-cleanup/output/
 dbx-cleanup/logs/
+
+# macOS metadata
+.DS_Store
