@@ -8,7 +8,6 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 import dropbox
 from dropbox.exceptions import ApiError, AuthError, DropboxException
@@ -116,9 +115,14 @@ def validate_paths_and_hashes(
             continue
         try:
             meta = with_retry(lambda r=row: client.files_get_metadata(r.path))
-        except ApiError:
-            missing.append(row.path)
-            continue
+        except ApiError as exc:
+            # Only treat path/not_found as "missing"; let other API errors
+            # (permission, malformed path, etc.) propagate so the user gets
+            # a real traceback rather than a misleading PATH_NOT_FOUND.
+            if "not_found" in str(exc.error):
+                missing.append(row.path)
+                continue
+            raise
         if getattr(meta, "content_hash", None) != row.content_hash:
             changed.append(row.path)
 

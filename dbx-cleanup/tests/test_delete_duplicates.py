@@ -146,15 +146,34 @@ def test_validate_paths_and_hashes_all_good() -> None:
     client.files_get_metadata.assert_called_once_with("/a")
 
 
+def _not_found_api_error() -> ApiError:
+    """ApiError whose .error str contains 'not_found' (matches our narrowing
+    in validate_paths_and_hashes)."""
+    err_payload = MagicMock()
+    err_payload.__str__ = lambda self: "GetMetadataError('path', LookupError('not_found'))"
+    return ApiError("req-id", err_payload, "user-msg", "")
+
+
 def test_validate_paths_and_hashes_missing_path() -> None:
     rows = [make_row(1, "/gone", True, h="h1"), make_row(1, "/b", False, h="h1")]
     client = MagicMock()
-    err = ApiError("req-id", MagicMock(), "user-msg", "")
-    client.files_get_metadata.side_effect = err
+    client.files_get_metadata.side_effect = _not_found_api_error()
     problems = validate_paths_and_hashes(client, rows)
     assert len(problems) == 1
     assert problems[0].code == "PATH_NOT_FOUND"
     assert "/gone" in problems[0].offending_paths
+
+
+def test_validate_paths_and_hashes_other_api_error_propagates() -> None:
+    """ApiError that isn't path/not_found (e.g. permission, malformed) must
+    surface as itself, not be silently bucketed as PATH_NOT_FOUND."""
+    rows = [make_row(1, "/locked", True, h="h1")]
+    client = MagicMock()
+    err_payload = MagicMock()
+    err_payload.__str__ = lambda self: "PermissionError('access_denied')"
+    client.files_get_metadata.side_effect = ApiError("req-id", err_payload, "msg", "")
+    with pytest.raises(ApiError):
+        validate_paths_and_hashes(client, rows)
 
 
 def test_validate_paths_and_hashes_changed_hash() -> None:

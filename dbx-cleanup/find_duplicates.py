@@ -191,6 +191,15 @@ def main() -> int:
                         help="Dropbox path to scan (default: /)")
     args = parser.parse_args()
 
+    # Normalize --root: strip whitespace, ensure leading slash so users can pass
+    # "test-duplicates/" or "/test-duplicates" interchangeably.
+    root = args.root.strip()
+    if not root:
+        print("--root cannot be empty", file=sys.stderr)
+        return 1
+    if not root.startswith("/"):
+        root = "/" + root
+
     try:
         config = load_config(Path(args.config))
         token = load_token()
@@ -208,7 +217,7 @@ def main() -> int:
 
     owner = client.users_get_current_account().account_id
 
-    entries = scan_dropbox(client, args.root, config, owner)
+    entries = scan_dropbox(client, root, config, owner)
     groups = group_by_hash(entries)
     selected = select_top_groups(groups, config.max_csv_rows)
 
@@ -221,6 +230,11 @@ def main() -> int:
     print(f"\nWrote {len(selected)} groups, {total_rows} rows to {out_path}")
     print(f"Total wasted space across selected groups: {total_wasted:,} bytes "
           f"({total_wasted / 1024 / 1024:.2f} MB)")
+    dropped = len(groups) - len(selected)
+    if dropped:
+        deferred_waste = sum(_wasted_bytes(g) for g in groups.values()) - total_wasted
+        print(f"({dropped} more groups deferred to next run; "
+              f"~{deferred_waste / 1024 / 1024:.1f} MB additional wasted space)")
     if not selected:
         print("(No duplicate groups found above the configured threshold.)")
     else:
