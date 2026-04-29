@@ -98,9 +98,18 @@ def test_validate_groups_have_survivor_flags_fully_marked_group() -> None:
             make_row(2, "/c", False), make_row(2, "/d", True)]
     problems = validate_groups_have_survivor(rows)
     assert len(problems) == 1
+    assert problems[0].code == "GROUP_FULLY_MARKED"
     assert "Group 1" in problems[0].message
     # Both rows from group 1 should be in offending_paths
     assert set(problems[0].offending_paths) == {"/a", "/b"}
+
+
+def test_validate_groups_have_survivor_flags_single_row_group_marked() -> None:
+    """A 1-row group with that row marked is the textbook user-error case."""
+    rows = [make_row(1, "/only-copy", True)]
+    problems = validate_groups_have_survivor(rows)
+    assert len(problems) == 1
+    assert problems[0].code == "GROUP_FULLY_MARKED"
 
 
 def test_validate_max_rows_passes_under_cap() -> None:
@@ -112,4 +121,5 @@ def test_validate_max_rows_flags_overage() -> None:
     rows = [make_row(1, f"/p{i}", True) for i in range(101)]
     problems = validate_max_rows(rows, max_csv_rows=100)
     assert len(problems) == 1
+    assert problems[0].code == "EXCEEDS_MAX_ROWS"
     assert "101" in problems[0].message
