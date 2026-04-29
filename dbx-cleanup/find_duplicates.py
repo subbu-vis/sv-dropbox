@@ -83,3 +83,23 @@ def select_top_groups(
             out.append(group)
             rows_used += len(group)
     return out
+
+
+CSV_HEADER = ["group_id", "filename", "size_bytes", "path", "content_hash",
+              "last_modified", "delete"]
+
+
+def write_csv(groups: list[list[FileEntry]], out_path: Path) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(CSV_HEADER)
+        for idx, group in enumerate(groups, start=1):
+            for entry in sorted(group, key=lambda e: e.path):
+                writer.writerow([
+                    idx, entry.name, entry.size, entry.path,
+                    entry.content_hash, entry.server_modified, "",
+                ])
+            # blank row between groups (but not after the last one)
+            if idx < len(groups):
+                writer.writerow([])

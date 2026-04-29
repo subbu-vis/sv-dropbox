@@ -1,8 +1,9 @@
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
-from find_duplicates import FileEntry, should_skip_file, group_by_hash, select_top_groups
+from find_duplicates import FileEntry, should_skip_file, group_by_hash, select_top_groups, write_csv
 
 
 @dataclass(frozen=True)
@@ -150,3 +151,28 @@ def test_select_top_groups_rejects_non_positive_cap() -> None:
 
 def test_group_by_hash_empty_input_returns_empty() -> None:
     assert group_by_hash([]) == {}
+
+
+def test_write_csv_columns_and_blank_rows_between_groups(tmp_path: Path) -> None:
+    groups = [
+        [
+            make_entry("a.txt", "/A/a.txt", 1000, "h1"),
+            make_entry("a.txt", "/B/a.txt", 1000, "h1"),
+        ],
+        [
+            make_entry("b.txt", "/C/b.txt", 2000, "h2"),
+            make_entry("b.txt", "/D/b.txt", 2000, "h2"),
+        ],
+    ]
+    out_path = tmp_path / "duplicates.csv"
+    write_csv(groups, out_path)
+
+    text = out_path.read_text()
+    lines = text.splitlines()
+    assert lines[0] == "group_id,filename,size_bytes,path,content_hash,last_modified,delete"
+    # Group 1: 2 rows, then blank, then group 2: 2 rows = 6 lines after header
+    assert lines[1].startswith("1,a.txt,1000,/A/a.txt,h1,")
+    assert lines[2].startswith("1,a.txt,1000,/B/a.txt,h1,")
+    assert lines[3] == ""
+    assert lines[4].startswith("2,b.txt,2000,/C/b.txt,h2,")
+    assert lines[5].startswith("2,b.txt,2000,/D/b.txt,h2,")
