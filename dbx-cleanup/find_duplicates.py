@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import argparse
 import csv
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
 import dropbox
+from dropbox.exceptions import AuthError
 from dropbox.files import FileMetadata, ListFolderResult
 
-from dbx_client import Config, get_client, load_config, load_token, with_retry
+from dbx_client import Config, MissingTokenError, get_client, load_config, load_token, with_retry
 
 
 @dataclass(frozen=True)
@@ -139,6 +141,11 @@ def scan_dropbox(
         for entry in result.entries:
             if not isinstance(entry, FileMetadata):
                 continue
+            # Skip files Dropbox can't fully describe yet: incomplete uploads have
+            # content_hash=None; some surfaced types (e.g. Paper docs) have
+            # server_modified=None. Both are required for downstream work.
+            if entry.content_hash is None or entry.server_modified is None:
+                continue
             files_scanned += 1
             if should_skip_file(
                 entry,
@@ -157,9 +164,10 @@ def scan_dropbox(
             ))
 
             if files_scanned % 1000 == 0:
-                dup_rows = sum(len(g) for g in group_by_hash(kept).values())
+                groups_so_far = group_by_hash(kept)
+                dup_rows = sum(len(g) for g in groups_so_far.values())
                 print(f"Scanned {files_scanned} files, "
-                      f"{len(group_by_hash(kept))} duplicate groups "
+                      f"{len(groups_so_far)} duplicate groups "
                       f"({dup_rows} rows)...")
                 if dup_rows >= config.early_exit_row_threshold:
                     print(f"Hit early-exit threshold ({config.early_exit_row_threshold}); "
@@ -183,9 +191,21 @@ def main() -> int:
                         help="Dropbox path to scan (default: /)")
     args = parser.parse_args()
 
-    config = load_config(Path(args.config))
-    token = load_token()
-    client = get_client(token)
+    try:
+        config = load_config(Path(args.config))
+        token = load_token()
+        client = get_client(token)
+    except FileNotFoundError as exc:
+        print(f"Config error: {exc}", file=sys.stderr)
+        return 1
+    except MissingTokenError as exc:
+        print(f"Token error: {exc}", file=sys.stderr)
+        return 1
+    except AuthError as exc:
+        print(f"Dropbox auth failed: {exc}. See README for token regeneration.",
+              file=sys.stderr)
+        return 1
+
     owner = client.users_get_current_account().account_id
 
     entries = scan_dropbox(client, args.root, config, owner)
@@ -201,8 +221,11 @@ def main() -> int:
     print(f"\nWrote {len(selected)} groups, {total_rows} rows to {out_path}")
     print(f"Total wasted space across selected groups: {total_wasted:,} bytes "
           f"({total_wasted / 1024 / 1024:.2f} MB)")
-    print("Mark 'x' in the delete column for files to remove, then run:")
-    print(f"  python delete_duplicates.py --csv {out_path}")
+    if not selected:
+        print("(No duplicate groups found above the configured threshold.)")
+    else:
+        print("Mark 'x' in the delete column for files to remove, then run:")
+        print(f"  python delete_duplicates.py --csv {out_path}")
     return 0
 
 
