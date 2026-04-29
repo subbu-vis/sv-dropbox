@@ -188,8 +188,13 @@ def execute_deletes(
                                  "deleted", f"moved to recycle bin: {deleted_path}"])
                 success += 1
                 print(f"  deleted: {row.path}")
+            except AuthError:
+                # Token expired/invalid mid-batch. Don't log 100 "errors" — fail
+                # fast so main() can surface a clear message and the user can
+                # regenerate their token before retrying.
+                raise
             except DropboxException as exc:
-                # ApiError, RateLimitError (after retries exhausted), AuthError, etc.
+                # ApiError, RateLimitError (after retries exhausted), etc.
                 writer.writerow([ts, row.path, row.size_bytes, row.content_hash,
                                  "error", str(exc)])
                 errors += 1
@@ -257,7 +262,14 @@ def main() -> int:
     rows_to_delete = [r for r in rows if r.marked_delete]
     ts = datetime.now().strftime("%Y-%m-%d-%H%M")
     audit_path = config.log_dir / f"delete-log-{ts}.csv"
-    summary = execute_deletes(client, rows_to_delete, audit_path)
+    try:
+        summary = execute_deletes(client, rows_to_delete, audit_path)
+    except AuthError as exc:
+        print(f"\nDropbox auth failed mid-batch: {exc}. Audit log written to "
+              f"{audit_path} for any deletes that succeeded before the failure. "
+              "Regenerate your token and re-run with the same CSV.",
+              file=sys.stderr)
+        return 1
 
     print(f"\nDone. Deleted: {summary.success_count}, Errors: {summary.error_count}")
     print(f"Audit log: {summary.log_path}")

@@ -203,3 +203,32 @@ def test_execute_deletes_continues_on_error(tmp_path: Path) -> None:
     assert log_text.count("\n") >= 4
     assert "/a" in log_text and "/b" in log_text and "/c" in log_text
     assert "deleted" in log_text and "error" in log_text
+
+
+def test_execute_deletes_propagates_auth_error(tmp_path: Path) -> None:
+    """Mid-batch token expiry must fail fast, not silently log 100 'errors'."""
+    from dropbox.exceptions import AuthError
+
+    rows_to_delete = [make_row(1, "/a", True), make_row(1, "/b", True)]
+    client = MagicMock()
+    client.files_delete_v2.side_effect = AuthError("req-id", "expired token")
+
+    log_path = tmp_path / "delete-log.csv"
+    with pytest.raises(AuthError):
+        execute_deletes(client, rows_to_delete, log_path)
+
+    # Audit log was created with header but no completed deletes (and crucially
+    # not a row-per-failure for every remaining file).
+    assert log_path.exists()
+    assert log_path.read_text().count("\n") <= 1
+
+
+def test_write_error_log_includes_introduction_text(tmp_path: Path) -> None:
+    log_path = tmp_path / "error.log"
+    write_error_log(
+        [ValidationProblem("X", "msg", ("/p",))],
+        log_path,
+    )
+    text = log_path.read_text()
+    assert "Pre-flight validation failed at" in text
+    assert "No deletions were performed." in text
