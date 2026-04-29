@@ -78,12 +78,15 @@ def test_with_retry_retries_on_rate_limit(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_with_retry_gives_up_after_max_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("dbx_client.time.sleep", lambda s: None)
+    sleep_calls: list[float] = []
+    monkeypatch.setattr("dbx_client.time.sleep", lambda s: sleep_calls.append(s))
     call = MagicMock()
     call.side_effect = _rate_limit_error(1.0)
     with pytest.raises(RateLimitError):
         with_retry(call, max_attempts=3)
     assert call.call_count == 3
+    # 3 attempts -> 2 sleeps between them; no sleep after the final failing attempt.
+    assert sleep_calls == [1, 1]
 
 
 def test_with_retry_does_not_retry_auth_error() -> None:
@@ -91,3 +94,29 @@ def test_with_retry_does_not_retry_auth_error() -> None:
     with pytest.raises(AuthError):
         with_retry(call)
     assert call.call_count == 1
+
+
+def test_with_retry_max_attempts_one_attempts_once_no_sleep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleep_calls: list[float] = []
+    monkeypatch.setattr("dbx_client.time.sleep", lambda s: sleep_calls.append(s))
+    call = MagicMock(side_effect=_rate_limit_error(5.0))
+    with pytest.raises(RateLimitError):
+        with_retry(call, max_attempts=1)
+    assert call.call_count == 1
+    assert sleep_calls == []
+
+
+def test_with_retry_max_attempts_zero_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="max_attempts must be >= 1"):
+        with_retry(MagicMock(), max_attempts=0)
+
+
+def test_with_retry_handles_none_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    sleep_calls: list[float] = []
+    monkeypatch.setattr("dbx_client.time.sleep", lambda s: sleep_calls.append(s))
+    call = MagicMock()
+    call.side_effect = [RateLimitError("req-id", MagicMock(), None), "ok"]
+    assert with_retry(call) == "ok"
+    assert sleep_calls == [1]

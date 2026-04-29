@@ -7,7 +7,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Callable, TypeVar
 
 import dropbox
 from dotenv import load_dotenv
@@ -76,14 +76,18 @@ def with_retry(call: Callable[[], T], max_attempts: int = 3) -> T:
     """Run `call` with retry on RateLimitError. AuthError is re-raised immediately.
 
     The dropbox SDK puts the server-recommended retry delay on RateLimitError.backoff
-    (seconds). We honor that; default to 1s if absent."""
-    last_error: Exception | None = None
+    (seconds). We honor that; default to 1s if absent or non-positive."""
+    if max_attempts < 1:
+        raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
+    last_error: RateLimitError | None = None
     for attempt in range(1, max_attempts + 1):
         try:
             return call()
         except RateLimitError as exc:
             last_error = exc
-            backoff = getattr(exc, "backoff", None) or 1
+            if attempt == max_attempts:
+                break
+            backoff = max(exc.backoff or 1, 1)
             print(f"Rate limited (attempt {attempt}/{max_attempts}); sleeping {backoff}s")
             time.sleep(backoff)
         except AuthError:
