@@ -43,3 +43,31 @@ def should_skip_file(
         if modified_by and modified_by != owner_account_id:
             return True
     return False
+
+
+def group_by_hash(entries: Iterable[FileEntry]) -> dict[str, list[FileEntry]]:
+    """Group entries by content_hash; drop singletons."""
+    groups: dict[str, list[FileEntry]] = {}
+    for entry in entries:
+        groups.setdefault(entry.content_hash, []).append(entry)
+    return {h: g for h, g in groups.items() if len(g) > 1}
+
+
+def _wasted_bytes(group: list[FileEntry]) -> int:
+    return (len(group) - 1) * group[0].size
+
+
+def select_top_groups(
+    groups: dict[str, list[FileEntry]],
+    max_csv_rows: int,
+) -> list[list[FileEntry]]:
+    """Sort groups by wasted bytes desc, greedily take whole groups whose
+    cumulative row count stays <= max_csv_rows. Never split a group."""
+    ranked = sorted(groups.values(), key=_wasted_bytes, reverse=True)
+    out: list[list[FileEntry]] = []
+    rows_used = 0
+    for group in ranked:
+        if rows_used + len(group) <= max_csv_rows:
+            out.append(group)
+            rows_used += len(group)
+    return out

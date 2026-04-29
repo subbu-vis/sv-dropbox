@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from find_duplicates import FileEntry, should_skip_file
+from find_duplicates import FileEntry, should_skip_file, group_by_hash, select_top_groups
 
 
 @dataclass(frozen=True)
@@ -87,3 +87,57 @@ def test_should_keep_shared_not_owned_when_flag_disabled() -> None:
     )
     assert should_skip_file(meta, min_file_size_bytes=100_000, skip_hidden=True,
                             skip_shared_not_owned=False, owner_account_id="self") is False
+
+
+def make_entry(name: str, path: str, size: int, h: str) -> FileEntry:
+    return FileEntry(name=name, path=path, size=size, content_hash=h,
+                     server_modified="2024-01-01T00:00:00Z")
+
+
+def test_group_by_hash_drops_singletons() -> None:
+    entries = [
+        make_entry("a.txt", "/a.txt", 1000, "h1"),
+        make_entry("b.txt", "/b.txt", 1000, "h1"),
+        make_entry("solo.txt", "/solo.txt", 999, "h2"),
+    ]
+    groups = group_by_hash(entries)
+    assert list(groups.keys()) == ["h1"]
+    assert len(groups["h1"]) == 2
+
+
+def test_select_top_groups_orders_by_wasted_space_desc() -> None:
+    # Group X: 2 copies × 5 KB → 5 KB wasted
+    # Group Y: 4 copies × 1.5 KB → 4.5 KB wasted
+    # Group Z: 3 copies × 2 KB → 4 KB wasted
+    groups = {
+        "Z": [make_entry("z.txt", f"/z{i}", 2000, "Z") for i in range(3)],
+        "X": [make_entry("x.txt", f"/x{i}", 5000, "X") for i in range(2)],
+        "Y": [make_entry("y.txt", f"/y{i}", 1500, "Y") for i in range(4)],
+    }
+    selected = select_top_groups(groups, max_csv_rows=100)
+    # Order: X (5 KB), Y (4.5 KB), Z (4 KB)
+    assert [g[0].content_hash for g in selected] == ["X", "Y", "Z"]
+
+
+def test_select_top_groups_never_splits_a_group() -> None:
+    # Two groups: A has 3 rows, B has 2 rows. Cap is 4. We should pick whichever
+    # ranks first that fits whole. A wastes (3-1)*1000=2000; B wastes (2-1)*1500=1500.
+    # A is bigger waster. A has 3 rows ≤ 4 → take A. Then B has 2 rows, A+B = 5 > 4 → skip B.
+    groups = {
+        "A": [make_entry("a.txt", f"/a{i}", 1000, "A") for i in range(3)],
+        "B": [make_entry("b.txt", f"/b{i}", 1500, "B") for i in range(2)],
+    }
+    selected = select_top_groups(groups, max_csv_rows=4)
+    assert len(selected) == 1
+    assert selected[0][0].content_hash == "A"
+
+
+def test_select_top_groups_skips_oversize_first_group() -> None:
+    # First-ranked group is bigger than cap; should skip and try smaller ones.
+    groups = {
+        "BIG": [make_entry("b.txt", f"/b{i}", 10_000, "BIG") for i in range(10)],
+        "SMALL": [make_entry("s.txt", f"/s{i}", 500, "SMALL") for i in range(2)],
+    }
+    selected = select_top_groups(groups, max_csv_rows=5)
+    # BIG has 10 rows > 5; skip. SMALL has 2 rows ≤ 5; keep.
+    assert [g[0].content_hash for g in selected] == ["SMALL"]
