@@ -42,13 +42,16 @@ pip install -r requirements.txt
 Open `config.ini`. Things you might tune:
 
 - `min_file_size_bytes` — files smaller than this are ignored (default 100 KB).
-- `ignored_folders` — list of folders to skip during the scan, one per line. Match is case-insensitive prefix, so an entry skips the folder itself and everything inside it recursively. Example:
+- `ignored_folders` — list of folders to skip during the scan, one per line. Match is **case-insensitive path prefix**: an entry skips the folder itself and everything inside it recursively, but does NOT affect siblings or parents.
 
   ```ini
   ignored_folders =
       /Cetachi Comics
       /Old Backups
+      /Photos/2019/raw
   ```
+
+  In this example, `/Photos/2019/raw` is ignored (and its descendants), but `/Photos/2019/edited`, `/Photos/2019`, and `/Photos/2020/raw` are all still scanned. To add a folder later, edit the file and re-run; no other changes needed.
 
 ## Test before unleashing
 
@@ -90,6 +93,15 @@ python delete_duplicates.py --csv output/duplicates-<timestamp>.csv
 
 # 4. Repeat. Each run handles up to 100 candidates.
 ```
+
+When the delete script finishes, it prints a final line like:
+
+```
+Done. Deleted: 42, Errors: 0, Space freed: 318 MB
+Audit log: logs/delete-log-2026-04-29-2105.csv
+```
+
+`Space freed` is the sum of byte sizes of every successfully-deleted file, rounded up to the nearest MB. Useful for tracking how much you've reclaimed across runs.
 
 ## Output files
 
