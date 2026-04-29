@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from delete_duplicates import CsvRow, parse_csv
+from delete_duplicates import CsvRow, ValidationProblem, parse_csv, validate_groups_have_survivor, validate_max_rows
 
 
 def write_csv(tmp_path: Path, body: str) -> Path:
@@ -78,3 +78,38 @@ def test_parse_csv_bad_int_includes_line_number(tmp_path: Path) -> None:
     ))
     with pytest.raises(ValueError, match="line 3"):
         parse_csv(p)
+
+
+def make_row(group_id: int, path: str, marked: bool, h: str = "h") -> CsvRow:
+    return CsvRow(
+        group_id=group_id, filename=path.rsplit("/", 1)[-1], size_bytes=1000,
+        path=path, content_hash=h, last_modified="2024-01-01T00:00:00",
+        marked_delete=marked,
+    )
+
+
+def test_validate_groups_have_survivor_passes_when_one_unmarked() -> None:
+    rows = [make_row(1, "/a", False), make_row(1, "/b", True)]
+    assert validate_groups_have_survivor(rows) == []
+
+
+def test_validate_groups_have_survivor_flags_fully_marked_group() -> None:
+    rows = [make_row(1, "/a", True), make_row(1, "/b", True),
+            make_row(2, "/c", False), make_row(2, "/d", True)]
+    problems = validate_groups_have_survivor(rows)
+    assert len(problems) == 1
+    assert "Group 1" in problems[0].message
+    # Both rows from group 1 should be in offending_paths
+    assert set(problems[0].offending_paths) == {"/a", "/b"}
+
+
+def test_validate_max_rows_passes_under_cap() -> None:
+    rows = [make_row(1, f"/p{i}", True) for i in range(5)]
+    assert validate_max_rows(rows, max_csv_rows=100) == []
+
+
+def test_validate_max_rows_flags_overage() -> None:
+    rows = [make_row(1, f"/p{i}", True) for i in range(101)]
+    problems = validate_max_rows(rows, max_csv_rows=100)
+    assert len(problems) == 1
+    assert "101" in problems[0].message

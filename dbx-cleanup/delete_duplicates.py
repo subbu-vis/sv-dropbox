@@ -63,3 +63,40 @@ def parse_csv(csv_path: Path) -> list[CsvRow]:
             except (ValueError, TypeError) as exc:
                 raise ValueError(f"{csv_path} line {lineno}: {exc}") from exc
     return rows
+
+
+@dataclass(frozen=True)
+class ValidationProblem:
+    code: str       # e.g. "GROUP_FULLY_MARKED"
+    message: str    # human-readable
+    offending_paths: tuple[str, ...]
+
+
+def validate_groups_have_survivor(rows: list[CsvRow]) -> list[ValidationProblem]:
+    """Validation B: each group must keep at least one row not marked for delete."""
+    problems: list[ValidationProblem] = []
+    by_group: dict[int, list[CsvRow]] = {}
+    for r in rows:
+        by_group.setdefault(r.group_id, []).append(r)
+    for gid, group_rows in by_group.items():
+        if all(r.marked_delete for r in group_rows):
+            problems.append(ValidationProblem(
+                code="GROUP_FULLY_MARKED",
+                message=(f"Group {gid} has every row marked 'x'. Refusing to delete "
+                         f"all copies of a file."),
+                offending_paths=tuple(r.path for r in group_rows),
+            ))
+    return problems
+
+
+def validate_max_rows(rows: list[CsvRow], max_csv_rows: int) -> list[ValidationProblem]:
+    """Validation C: total marked-delete count must not exceed max_csv_rows."""
+    marked = [r for r in rows if r.marked_delete]
+    if len(marked) > max_csv_rows:
+        return [ValidationProblem(
+            code="EXCEEDS_MAX_ROWS",
+            message=(f"{len(marked)} rows are marked for deletion; daily cap is "
+                     f"{max_csv_rows}. Reduce the marked rows and re-run."),
+            offending_paths=tuple(r.path for r in marked),
+        )]
+    return []
