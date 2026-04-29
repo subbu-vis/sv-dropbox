@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "dropbox": {
+      "command": "node",
+      "args": [
+        "/Users/minda/ClaudeWork/sv-dropbox/dbx-mcp-server/build/src/index.js"
+      ]
+    }
+  }
+}

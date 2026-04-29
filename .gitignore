@@ -1,0 +1,22 @@
+# secrets
+dropbox-secrets.md
+*.secrets.md
+.env
+.env.*
+!.env.example
+
+# foreign clone, not part of this repo
+dbx-mcp-server/
+
+# claude code local settings
+.claude/settings.local.json
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# script outputs (generated at runtime)
+dbx-cleanup/output/
+dbx-cleanup/logs/
