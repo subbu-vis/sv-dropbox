@@ -33,6 +33,7 @@ def should_skip_file(
     skip_hidden: bool,
     skip_shared_not_owned: bool,
     owner_account_id: str,
+    ignored_folders: tuple[str, ...] = (),
 ) -> bool:
     if meta.size == 0:
         return True
@@ -41,6 +42,13 @@ def should_skip_file(
     if skip_hidden:
         for segment in meta.path_display.split("/"):
             if segment.startswith("."):
+                return True
+    # ignored_folders entries are pre-normalized (lowercase, no trailing slash).
+    # Match by case-insensitive prefix on the file's path: `<ignored>/...`.
+    if ignored_folders:
+        path_lower = meta.path_display.lower()
+        for folder in ignored_folders:
+            if path_lower == folder or path_lower.startswith(folder + "/"):
                 return True
     if skip_shared_not_owned and getattr(meta, "sharing_info", None) is not None:
         info = meta.sharing_info
@@ -153,6 +161,7 @@ def scan_dropbox(
                 skip_hidden=config.skip_hidden,
                 skip_shared_not_owned=config.skip_shared_not_owned,
                 owner_account_id=owner_account_id,
+                ignored_folders=config.ignored_folders,
             ):
                 continue
             kept.append(FileEntry(

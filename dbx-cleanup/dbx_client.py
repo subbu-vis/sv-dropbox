@@ -25,6 +25,23 @@ class Config:
     max_csv_rows: int
     csv_output_dir: Path
     log_dir: Path
+    # Folder paths to skip during scan. Stored normalized (leading slash, no
+    # trailing slash, lowercase) for efficient case-insensitive prefix match.
+    ignored_folders: tuple[str, ...]
+
+
+def _parse_ignored_folders(raw: str) -> tuple[str, ...]:
+    """Parse a multi-line INI value into a normalized tuple of folder paths."""
+    out: list[str] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if not line.startswith("/"):
+            line = "/" + line
+        line = line.rstrip("/")
+        out.append(line.lower())
+    return tuple(out)
 
 
 def load_config(path: Path) -> Config:
@@ -42,6 +59,7 @@ def load_config(path: Path) -> Config:
         max_csv_rows=scan.getint("max_csv_rows"),
         csv_output_dir=Path(paths["csv_output_dir"]),
         log_dir=Path(paths["log_dir"]),
+        ignored_folders=_parse_ignored_folders(scan.get("ignored_folders", "")),
     )
 
 

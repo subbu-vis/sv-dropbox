@@ -90,6 +90,39 @@ def test_should_keep_shared_not_owned_when_flag_disabled() -> None:
                             skip_shared_not_owned=False, owner_account_id="self") is False
 
 
+@pytest.mark.parametrize(
+    "path, expected_skip",
+    [
+        # exact-folder match (case-insensitive) and recursive descendants
+        ("/Cetachi Comics/issue1.cbr", True),
+        ("/cetachi comics/issue1.cbr", True),
+        ("/Cetachi Comics/sub/x/y.cbr", True),
+        # not under an ignored folder
+        ("/Photos/img.jpg", False),
+        # near-match: different folder name that starts with same prefix
+        ("/Cetachi Comics And More/x.cbr", False),
+        # the folder itself (rare, but defensive)
+        ("/Cetachi Comics", True),
+    ],
+)
+def test_should_skip_file_honors_ignored_folders(path: str, expected_skip: bool) -> None:
+    meta = FakeMeta(
+        name=path.rsplit("/", 1)[-1] or "x",
+        path_display=path,
+        size=200_000,
+        content_hash="h",
+        server_modified="2024-01-01T00:00:00Z",
+    )
+    assert should_skip_file(
+        meta,
+        min_file_size_bytes=100_000,
+        skip_hidden=True,
+        skip_shared_not_owned=True,
+        owner_account_id="self",
+        ignored_folders=("/cetachi comics",),
+    ) is expected_skip
+
+
 def make_entry(name: str, path: str, size: int, h: str) -> FileEntry:
     return FileEntry(name=name, path=path, size=size, content_hash=h,
                      server_modified="2024-01-01T00:00:00Z")

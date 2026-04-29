@@ -39,7 +39,16 @@ pip install -r requirements.txt
 
 ### 3. Review settings
 
-Open `config.ini`. Most users only adjust `min_file_size_bytes` (default 100 KB — files smaller than this are ignored to reduce noise).
+Open `config.ini`. Things you might tune:
+
+- `min_file_size_bytes` — files smaller than this are ignored (default 100 KB).
+- `ignored_folders` — list of folders to skip during the scan, one per line. Match is case-insensitive prefix, so an entry skips the folder itself and everything inside it recursively. Example:
+
+  ```ini
+  ignored_folders =
+      /Cetachi Comics
+      /Old Backups
+  ```
 
 ## Test before unleashing
 

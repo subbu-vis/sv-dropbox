@@ -32,6 +32,32 @@ def test_load_config_reads_scan_and_paths(tmp_path: Path) -> None:
     assert cfg.max_csv_rows == 100
     assert cfg.csv_output_dir == Path("./output")
     assert cfg.log_dir == Path("./logs")
+    assert cfg.ignored_folders == ()
+
+
+def test_load_config_parses_multiline_ignored_folders(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "config.ini"
+    cfg_path.write_text(
+        "[scan]\n"
+        "min_file_size_bytes = 102400\n"
+        "skip_shared_not_owned = true\n"
+        "skip_hidden = true\n"
+        "early_exit_row_threshold = 1000\n"
+        "max_csv_rows = 100\n"
+        "ignored_folders =\n"
+        "    /Cetachi Comics\n"
+        "    /Old Backups/\n"
+        "    NoLeadingSlash\n"
+        "\n"
+        "[paths]\n"
+        "csv_output_dir = ./output\n"
+        "log_dir = ./logs\n"
+    )
+
+    cfg = load_config(cfg_path)
+
+    # Normalized: leading slash, no trailing slash, lowercased.
+    assert cfg.ignored_folders == ("/cetachi comics", "/old backups", "/noleadingslash")
 
 
 def test_load_config_missing_file_raises(tmp_path: Path) -> None:
