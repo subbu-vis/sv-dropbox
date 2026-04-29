@@ -141,3 +141,12 @@ def test_select_top_groups_skips_oversize_first_group() -> None:
     selected = select_top_groups(groups, max_csv_rows=5)
     # BIG has 10 rows > 5; skip. SMALL has 2 rows ≤ 5; keep.
     assert [g[0].content_hash for g in selected] == ["SMALL"]
+
+
+def test_select_top_groups_rejects_non_positive_cap() -> None:
+    with pytest.raises(ValueError, match="max_csv_rows must be positive"):
+        select_top_groups({"X": [make_entry("a", "/a", 1, "X")]}, max_csv_rows=0)
+
+
+def test_group_by_hash_empty_input_returns_empty() -> None:
+    assert group_by_hash([]) == {}

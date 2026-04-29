@@ -54,6 +54,10 @@ def group_by_hash(entries: Iterable[FileEntry]) -> dict[str, list[FileEntry]]:
 
 
 def _wasted_bytes(group: list[FileEntry]) -> int:
+    # All entries in a group share the same content_hash, which by Dropbox's
+    # definition means identical bytes -> identical size. Assert it so a bad
+    # mock or upstream bug fails loudly rather than producing wrong rankings.
+    assert all(e.size == group[0].size for e in group), "mixed-size group"
     return (len(group) - 1) * group[0].size
 
 
@@ -61,9 +65,17 @@ def select_top_groups(
     groups: dict[str, list[FileEntry]],
     max_csv_rows: int,
 ) -> list[list[FileEntry]]:
-    """Sort groups by wasted bytes desc, greedily take whole groups whose
-    cumulative row count stays <= max_csv_rows. Never split a group."""
-    ranked = sorted(groups.values(), key=_wasted_bytes, reverse=True)
+    """Sort groups by wasted bytes desc (with group-size as tie-breaker),
+    greedily take whole groups whose cumulative row count stays <= max_csv_rows.
+    Never splits a group.
+
+    Greedy is intentionally not optimal: it can miss a better packing of two
+    smaller groups when a bigger group fits but uses up the budget. For the
+    realistic case (surface the largest wasters in <=100 rows), greedy is fine."""
+    if max_csv_rows <= 0:
+        raise ValueError(f"max_csv_rows must be positive, got {max_csv_rows}")
+    ranked = sorted(groups.values(), key=lambda g: (_wasted_bytes(g), len(g)),
+                    reverse=True)
     out: list[list[FileEntry]] = []
     rows_used = 0
     for group in ranked:
