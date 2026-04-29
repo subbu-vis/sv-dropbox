@@ -39,3 +39,36 @@ def load_config(path: Path) -> Config:
         csv_output_dir=Path(paths["csv_output_dir"]),
         log_dir=Path(paths["log_dir"]),
     )
+
+
+from dotenv import load_dotenv
+
+
+class MissingTokenError(RuntimeError):
+    """Raised when the Dropbox access token is missing or empty."""
+
+
+def load_token(env_path: Path | None = None) -> str:
+    if env_path is not None:
+        load_dotenv(env_path)
+    else:
+        load_dotenv()
+    token = os.environ.get("DROPBOX_ACCESS_TOKEN", "").strip()
+    if not token:
+        raise MissingTokenError(
+            "DROPBOX_ACCESS_TOKEN is not set. "
+            "See README for steps to generate a personal access token "
+            "in the Dropbox App Console and add it to .env."
+        )
+    return token
+
+
+import dropbox
+
+
+def get_client(token: str) -> dropbox.Dropbox:
+    """Build a Dropbox SDK client and verify the token by calling users_get_current_account."""
+    client = dropbox.Dropbox(token)
+    account = client.users_get_current_account()
+    print(f"Connected to Dropbox as {account.email}")
+    return client

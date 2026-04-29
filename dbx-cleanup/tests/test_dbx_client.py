@@ -35,3 +35,27 @@ def test_load_config_missing_file_raises(tmp_path: Path) -> None:
     missing = tmp_path / "nope.ini"
     with pytest.raises(FileNotFoundError):
         load_config(missing)
+
+
+from dbx_client import MissingTokenError, load_token
+
+
+def test_load_token_returns_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("DROPBOX_ACCESS_TOKEN=sl.test123\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DROPBOX_ACCESS_TOKEN", raising=False)
+    assert load_token(env_file) == "sl.test123"
+
+
+def test_load_token_missing_raises_with_helpful_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("DROPBOX_ACCESS_TOKEN=\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DROPBOX_ACCESS_TOKEN", raising=False)
+    with pytest.raises(MissingTokenError) as excinfo:
+        load_token(env_file)
+    assert "DROPBOX_ACCESS_TOKEN" in str(excinfo.value)
+    assert "README" in str(excinfo.value)
