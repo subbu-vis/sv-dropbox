@@ -56,3 +56,34 @@ def test_should_keep_shared_owned_by_self() -> None:
     )
     assert should_skip_file(meta, min_file_size_bytes=100_000, skip_hidden=True,
                             skip_shared_not_owned=True, owner_account_id="self") is False
+
+
+def test_should_keep_shared_when_modified_by_is_none() -> None:
+    """When sharing_info exists but modified_by is None, we can't prove ownership;
+    keep the file rather than skip it."""
+    meta = FakeMeta(
+        name="x.pdf", path_display="/Shared/x.pdf", size=200_000,
+        content_hash="h", server_modified="2024-01-01T00:00:00Z",
+        sharing_info=FakeShareInfo(modified_by=None),
+    )
+    assert should_skip_file(meta, min_file_size_bytes=100_000, skip_hidden=True,
+                            skip_shared_not_owned=True, owner_account_id="self") is False
+
+
+def test_should_keep_hidden_when_skip_hidden_disabled() -> None:
+    meta = FakeMeta(
+        name=".hidden", path_display="/Photos/.hidden", size=200_000,
+        content_hash="h", server_modified="2024-01-01T00:00:00Z",
+    )
+    assert should_skip_file(meta, min_file_size_bytes=100_000, skip_hidden=False,
+                            skip_shared_not_owned=True, owner_account_id="self") is False
+
+
+def test_should_keep_shared_not_owned_when_flag_disabled() -> None:
+    meta = FakeMeta(
+        name="x.pdf", path_display="/Shared/x.pdf", size=200_000,
+        content_hash="h", server_modified="2024-01-01T00:00:00Z",
+        sharing_info=FakeShareInfo(modified_by="other-account"),
+    )
+    assert should_skip_file(meta, min_file_size_bytes=100_000, skip_hidden=True,
+                            skip_shared_not_owned=False, owner_account_id="self") is False

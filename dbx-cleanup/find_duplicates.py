@@ -11,7 +11,7 @@ from typing import Any, Iterable
 @dataclass(frozen=True)
 class FileEntry:
     name: str
-    path: str
+    path: str  # Dropbox path_display (case-preserving); use for CSV + delete API calls
     size: int
     content_hash: str
     server_modified: str
