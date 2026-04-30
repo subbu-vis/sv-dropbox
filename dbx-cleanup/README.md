@@ -1,11 +1,12 @@
 # dbx-cleanup
 
-Phase 1 scripts for finding and deleting duplicate files in Dropbox.
+Phase 1 scripts for finding and deleting duplicate files in Dropbox, plus a read-only folder-size report.
 
-Two scripts:
+Three scripts:
 
 - `find_duplicates.py` — scans Dropbox, identifies byte-identical files in different locations, writes a CSV ranked by wasted space (≤100 rows).
 - `delete_duplicates.py` — ingests the user-edited CSV and moves flagged files to Dropbox's recycle bin, with strict pre-flight validations.
+- `dbx_folder_sizes.py` — read-only audit. Walks every file and writes a CSV listing every folder by total size (descending). Useful for "where's my space going?".
 
 ## One-time setup
 
@@ -148,9 +149,26 @@ If all pass: you're prompted for a literal `yes`. Anything else aborts (exit `1`
 - **Audit log** (`logs/delete-log-YYYY-MM-DD-HHMM.csv`) records timestamp, path, size, hash, status (`deleted` or `error`), and the Dropbox response confirming each move to the recycle bin.
 - **Final summary** prints `Deleted N, Errors M, Space freed K MB` where `K` is the sum of byte sizes of every successfully-deleted row, rounded up to MB.
 
+### `dbx_folder_sizes.py` — read-only folder-size audit
+
+Strictly read-only — no Dropbox API call ever modifies state. The script walks every file in the account via `files_list_folder(recursive=True)` and attributes each file's size to **every named ancestor folder** (a 5 MB file at `/Photos/2019/raw/img.cr2` adds 5 MB to `/Photos`, `/Photos/2019`, and `/Photos/2019/raw`). This `du`-style rollup means top-level folders show their full footprint and you can drill in by sorting deeper paths.
+
+**No filtering.** Unlike `find_duplicates.py`, this script ignores no folders or file types. Hidden folders, shared-not-owned files, ignored_folders entries, and tiny files are all counted — the goal is a complete picture of your data.
+
+**Output.** `output/dbx-file-size-YYYY-MM-DD-HHMM.csv` with columns `folder, size_mb, file_count`. Sorted by raw bytes desc (so two folders that both round up to 1 MB still have a stable order). Sizes are integer MB rounded up — anything ≥ 1 byte shows at least 1 MB.
+
+**Usage:**
+```bash
+python dbx_folder_sizes.py
+# Optional: --config <path> to use a different config (default: config.ini)
+```
+
+The only config setting it reads is `[paths].csv_output_dir`. The scan itself isn't tunable — it walks everything.
+
 ## Output files
 
 - `output/duplicates-YYYY-MM-DD-HHMM.csv` — candidate duplicates, columns: `group_id, filename, size_bytes, path, content_hash, last_modified, delete`. Rows are grouped, with a blank row between groups.
+- `output/dbx-file-size-YYYY-MM-DD-HHMM.csv` — folder-size audit (read-only), columns: `folder, size_mb, file_count`. Sorted descending by size.
 - `logs/delete-log-YYYY-MM-DD-HHMM.csv` — audit log of every delete attempt: timestamp, path, status (`deleted` or `error`), and the Dropbox response confirming the file is in the recycle bin.
 - `logs/error-YYYY-MM-DD-HHMM.log` — written when pre-flight validation fails. Lists every offending row and the reason. No deletions occur.
 
