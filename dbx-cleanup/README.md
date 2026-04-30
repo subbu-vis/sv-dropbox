@@ -103,6 +103,51 @@ Audit log: logs/delete-log-2026-04-29-2105.csv
 
 `Space freed` is the sum of byte sizes of every successfully-deleted file, rounded up to the nearest MB. Useful for tracking how much you've reclaimed across runs.
 
+## How it works
+
+### `find_duplicates.py` — scan, filter, rank
+
+**What counts as a duplicate.** Two files are duplicates if and only if they share Dropbox's `content_hash` (a deterministic SHA-256 of 4 MB blocks). Filenames don't have to match — `report.pdf` in `/Work` and `renamed.pdf` in `/Archive` with identical bytes will group together. Conversely, two files named the same with different content do NOT group.
+
+**Skip rules** (applied in this order; first match wins):
+
+1. **Empty files** (`size == 0`) — always skipped.
+2. **Below threshold** — files smaller than `min_file_size_bytes` (configurable, default 100 KB).
+3. **Hidden** — files/folders with any path segment starting with `.` (e.g. `/.dropbox.cache/...`), when `skip_hidden=true`.
+4. **Ignored folders** — files under any entry in `ignored_folders` (case-insensitive path-prefix match; affects only the listed subtree, not siblings or the parent).
+5. **Shared, not owned by you** — files in shared folders where the last modifier is someone else, when `skip_shared_not_owned=true`. This is a heuristic based on `sharing_info.modified_by`; if a collaborator touched a file you own, it may be excluded; if you touched their file, it may be included.
+6. **Incomplete or untyped** — files where `content_hash` is `None` (still uploading) or `server_modified` is `None` (e.g., Dropbox Paper docs surfaced as files).
+
+**Selection logic.** After grouping by `content_hash` and dropping singletons, each group's wasted bytes is `(count − 1) × file_size`. Groups are sorted by wasted bytes desc (tie-breaker: more copies first). Then greedy: take whole groups in ranked order while the cumulative row count stays ≤ `max_csv_rows` (default 100). Groups are never split — you always see all copies of a file together when deciding what to delete.
+
+Greedy is intentionally not optimal: if the top group has 30 rows and the next two groups have 35 + 35 rows, you'd see only the first one (the 70-row pair would fit better but greedy already committed). The summary tells you how many groups were deferred to the next run, so you know to rerun.
+
+**Early exit.** Scanning the whole Dropbox can take a while. Once the running tally hits `early_exit_row_threshold` duplicate rows (default 1,000), the scan stops — you already have plenty to work with. Groups beyond that point will surface in subsequent runs once you've cleaned up.
+
+### `delete_duplicates.py` — validate, confirm, execute
+
+The script does **all** validation before any Dropbox writes. If anything fails, no file is touched.
+
+**Four pre-flight validations** (all run to completion so you see every problem at once):
+
+| Code | What it checks | Why |
+|---|---|---|
+| `PATH_NOT_FOUND` | Each marked path still exists in Dropbox (`files_get_metadata`). Only `path/not_found` errors are bucketed here; permission/malformed-path errors propagate as a real error. | The file may have been moved or deleted since the scan. |
+| `GROUP_FULLY_MARKED` | For each `group_id`, at least one row is NOT marked `x`. | Safety net: prevents deleting all copies of a file even if you mark them all by accident. |
+| `EXCEEDS_MAX_ROWS` | Total `x` count ≤ `max_csv_rows` (default 100). | Daily-rate-limit safety; matches the cap `find_duplicates.py` writes into the CSV. |
+| `HASH_CHANGED` | Each marked row's current `content_hash` in Dropbox matches what's in the CSV. | Catches the case where you edited a file between scan and delete; refuses to delete content you may have changed. |
+
+If any validation fails: an error log is written to `logs/error-YYYY-MM-DD-HHMM.log` listing every offending row and the reason. Exit code `2`. No deletes performed.
+
+If all pass: you're prompted for a literal `yes`. Anything else aborts (exit `1`).
+
+**Execution.** For each marked row, the script calls `files_delete_v2(path)`, which moves the file to Dropbox's "Deleted files" area (recoverable for 30+ days). Behavior:
+
+- **Per-file errors** are logged to the audit CSV and the script continues with the rest. One bad file doesn't block the batch.
+- **`AuthError` mid-batch** (expired token, etc.) is re-raised immediately rather than being logged as a per-row error — otherwise an expired token at row 50 would produce 50 fake "errors" instead of one clear "regenerate your token" message.
+- **Audit log** (`logs/delete-log-YYYY-MM-DD-HHMM.csv`) records timestamp, path, size, hash, status (`deleted` or `error`), and the Dropbox response confirming each move to the recycle bin.
+- **Final summary** prints `Deleted N, Errors M, Space freed K MB` where `K` is the sum of byte sizes of every successfully-deleted row, rounded up to MB.
+
 ## Output files
 
 - `output/duplicates-YYYY-MM-DD-HHMM.csv` — candidate duplicates, columns: `group_id, filename, size_bytes, path, content_hash, last_modified, delete`. Rows are grouped, with a blank row between groups.
