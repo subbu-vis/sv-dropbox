@@ -151,11 +151,27 @@ If all pass: you're prompted for a literal `yes`. Anything else aborts (exit `1`
 
 ### `dbx_folder_sizes.py` — read-only folder-size audit
 
-Strictly read-only — no Dropbox API call ever modifies state. The script walks every file in the account via `files_list_folder(recursive=True)` and attributes each file's size to **every named ancestor folder** (a 5 MB file at `/Photos/2019/raw/img.cr2` adds 5 MB to `/Photos`, `/Photos/2019`, and `/Photos/2019/raw`). This `du`-style rollup means top-level folders show their full footprint and you can drill in by sorting deeper paths.
+Strictly read-only — no Dropbox API call ever modifies state. The script walks every file in the account via `files_list_folder(recursive=True)` and attributes each file's size to its named ancestor folders, **capped at 3 levels deep** (the `MAX_FOLDER_DEPTH` constant). A 5 MB file at `/Photos/2019/raw/jan/img.cr2` rolls up to `/Photos`, `/Photos/2019`, and `/Photos/2019/raw` — but `/Photos/2019/raw/jan` does not appear in the output. This `du`-style rollup means top-level totals stay correct (the file is still counted in `/Photos/2019/raw`'s sum), while keeping the report scannable.
 
-**No filtering.** Unlike `find_duplicates.py`, this script ignores no folders or file types. Hidden folders, shared-not-owned files, ignored_folders entries, and tiny files are all counted — the goal is a complete picture of your data.
+**No filtering.** Unlike `find_duplicates.py`, this script ignores no folders or file types. Hidden folders, shared-not-owned files, `ignored_folders` entries, and tiny files are all counted — the goal is a complete picture of your data.
 
-**Output.** `output/dbx-file-size-YYYY-MM-DD-HHMM.csv` with columns `folder, size_mb, file_count`. Sorted by raw bytes desc (so two folders that both round up to 1 MB still have a stable order). Sizes are integer MB rounded up — anything ≥ 1 byte shows at least 1 MB.
+**Tree-ordered output.** Rows are arranged so each parent folder is followed immediately by its subfolders, recursively. At every level, siblings are sorted by size descending. Example:
+
+```
+folder,size_mb,file_count
+/Photos,200,50         ← biggest top-level
+/Photos/2020,120,30    ←   biggest /Photos child
+/Photos/2020/raw,100,25  ←     biggest /Photos/2020 child
+/Photos/2020/edited,20,5
+/Photos/2019,80,20     ←   smaller /Photos child
+/Music,100,30          ← second top-level
+/Music/Albums,90,25
+/Music/Albums/Stones,50,12
+/Music/Albums/Beatles,30,10
+/Music/Singles,10,5
+```
+
+**Output file.** `output/dbx-file-size-YYYY-MM-DD-HHMM.csv` with columns `folder, size_mb, file_count`. Sizes are integer MB rounded up — anything ≥ 1 byte shows at least 1 MB.
 
 **Usage:**
 ```bash
@@ -163,7 +179,7 @@ python dbx_folder_sizes.py
 # Optional: --config <path> to use a different config (default: config.ini)
 ```
 
-The only config setting it reads is `[paths].csv_output_dir`. The scan itself isn't tunable — it walks everything.
+The only config setting it reads is `[paths].csv_output_dir`. The scan itself isn't tunable — it walks everything to depth 3.
 
 ## Output files
 
