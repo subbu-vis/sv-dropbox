@@ -38,16 +38,24 @@ pip install -r requirements.txt
    # edit .env, paste the token after DROPBOX_ACCESS_TOKEN=
    ```
 
-### 3. Review settings
+### 3. Create your personal config
 
-Open `config.ini`. Things you might tune:
+`config.ini` ships with safe defaults and generic example folders. **Don't edit it directly** — instead, copy it to `config.local.ini` and put your real settings there. `config.local.ini` is gitignored, so your folder names and tuning never get pushed.
+
+```bash
+cp config.ini config.local.ini
+# then edit config.local.ini with your real ignored_folders and any tuning
+```
+
+From here on, **always pass `--config config.local.ini`** to every command. If you forget the flag, the scripts fall back to the generic `config.ini` and will scan folders you wanted to skip.
+
+Things you might tune in `config.local.ini`:
 
 - `min_file_size_bytes` — files smaller than this are ignored (default 100 KB).
 - `ignored_folders` — list of folders to skip during the scan, one per line. Match is **case-insensitive path prefix**: an entry skips the folder itself and everything inside it recursively, but does NOT affect siblings or parents.
 
   ```ini
   ignored_folders =
-      /Old Backups
       /Old Backups
       /Photos/2019/raw
   ```
@@ -81,19 +89,26 @@ python delete_duplicates.py --config config.test.ini --csv output/duplicates-<ti
 
 ## Real usage
 
+Always pass `--config config.local.ini` so your personal settings (ignored folders, thresholds) take effect.
+
 ```bash
 # 1. Find candidate duplicates across your whole Dropbox
-python find_duplicates.py
+python find_duplicates.py --config config.local.ini
 
 # 2. Open the CSV under output/ in your spreadsheet (Excel, Numbers, Google Sheets…).
 #    Mark 'x' in the `delete` column for files you want removed.
 #    Save the CSV.
 
 # 3. Move marked files to Dropbox's recycle bin
-python delete_duplicates.py --csv output/duplicates-<timestamp>.csv
+python delete_duplicates.py --config config.local.ini --csv output/duplicates-<timestamp>.csv
 
-# 4. Repeat. Each run handles up to 100 candidates.
+# 4. Folder-size audit (read-only, optional)
+python dbx_folder_sizes.py --config config.local.ini
+
+# 5. Repeat. Each run handles up to 100 candidates.
 ```
+
+> **Note:** if you omit `--config config.local.ini`, the scripts fall back to the tracked `config.ini`, which has only generic example values for `ignored_folders`. Folders you intended to skip will be scanned anyway. Not destructive — `find_duplicates.py` is read-only — but slower and noisier.
 
 When the delete script finishes, it prints a final line like:
 
@@ -175,8 +190,8 @@ folder,size_mb,file_count
 
 **Usage:**
 ```bash
-python dbx_folder_sizes.py
-# Optional: --config <path> to use a different config (default: config.ini)
+python dbx_folder_sizes.py --config config.local.ini
+# --config defaults to config.ini if omitted
 ```
 
 The only config setting it reads is `[paths].csv_output_dir`. The scan itself isn't tunable — it walks everything to depth 3.

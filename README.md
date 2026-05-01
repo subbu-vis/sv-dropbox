@@ -79,6 +79,8 @@ After the retention window, files are permanently purged and cannot be recovered
 
 All operational documentation — how to install, generate a Dropbox token, configure the scan, run the find/delete cycle, and run tests — lives in [`dbx-cleanup/README.md`](./dbx-cleanup/README.md).
 
+> **Recommended pattern for everyone:** copy `dbx-cleanup/config.ini` to `dbx-cleanup/config.local.ini`, put your real `ignored_folders` and tuning there (it's gitignored), and pass `--config config.local.ini` to every script invocation. The tracked `config.ini` is a generic public template — scanning your real Dropbox with it works, but it won't honor any personal skip rules. Full details in [`dbx-cleanup/README.md`](./dbx-cleanup/README.md#3-create-your-personal-config).
+
 ## Repository layout
 
 ```
