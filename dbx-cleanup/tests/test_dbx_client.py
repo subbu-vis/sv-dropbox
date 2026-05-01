@@ -45,8 +45,8 @@ def test_load_config_parses_multiline_ignored_folders(tmp_path: Path) -> None:
         "early_exit_row_threshold = 1000\n"
         "max_csv_rows = 100\n"
         "ignored_folders =\n"
-        "    /Cetachi Comics\n"
-        "    /Old Backups/\n"
+        "    /Old Backups\n"
+        "    /Photos/raw/\n"
         "    NoLeadingSlash\n"
         "\n"
         "[paths]\n"
@@ -57,7 +57,7 @@ def test_load_config_parses_multiline_ignored_folders(tmp_path: Path) -> None:
     cfg = load_config(cfg_path)
 
     # Normalized: leading slash, no trailing slash, lowercased.
-    assert cfg.ignored_folders == ("/cetachi comics", "/old backups", "/noleadingslash")
+    assert cfg.ignored_folders == ("/old backups", "/photos/raw", "/noleadingslash")
 
 
 def test_load_config_missing_file_raises(tmp_path: Path) -> None:

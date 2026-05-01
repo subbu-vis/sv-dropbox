@@ -17,7 +17,7 @@ from dbx_folder_sizes import (
         ("/a/b/c/file.txt", ["/a", "/a/b", "/a/b/c"]),
         ("/photos/img.jpg", ["/photos"]),
         ("/file.txt", []),
-        ("/Cetachi Comics/issue1.cbr", ["/Cetachi Comics"]),
+        ("/Old Backups/issue1.cbr", ["/Old Backups"]),
         # Deep files cap at MAX_FOLDER_DEPTH=3 — /a/b/c/d/e.txt yields /a, /a/b, /a/b/c
         ("/a/b/c/d/e.txt", ["/a", "/a/b", "/a/b/c"]),
         ("/a/b/c/d/e/f/g.txt", ["/a", "/a/b", "/a/b/c"]),

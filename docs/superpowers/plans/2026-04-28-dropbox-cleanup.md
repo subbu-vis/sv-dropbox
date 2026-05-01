@@ -60,9 +60,9 @@ Pure functions take data in and return data out; orchestration code in `main()` 
 
 Run:
 ```bash
-mkdir -p /Users/minda/ClaudeWork/sv-dropbox/dbx-cleanup/tests
-mkdir -p /Users/minda/ClaudeWork/sv-dropbox/dbx-cleanup/output
-mkdir -p /Users/minda/ClaudeWork/sv-dropbox/dbx-cleanup/logs
+mkdir -p <repo>/dbx-cleanup/tests
+mkdir -p <repo>/dbx-cleanup/output
+mkdir -p <repo>/dbx-cleanup/logs
 ```
 
 - [ ] **Step 2: Write `requirements.txt`**
@@ -120,7 +120,7 @@ Create `dbx-cleanup/tests/conftest.py` (empty — fixtures added in later tasks)
 - [ ] **Step 7: Verify dependencies install in a fresh venv**
 
 ```bash
-cd /Users/minda/ClaudeWork/sv-dropbox/dbx-cleanup
+cd <repo>/dbx-cleanup
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -132,7 +132,7 @@ Expected: `ok` printed.
 - [ ] **Step 8: Commit**
 
 ```bash
-cd /Users/minda/ClaudeWork/sv-dropbox
+cd <repo>
 git add dbx-cleanup/requirements.txt dbx-cleanup/.env.example dbx-cleanup/config.ini dbx-cleanup/config.test.ini dbx-cleanup/tests/__init__.py dbx-cleanup/tests/conftest.py
 git commit -m "scaffold: dbx-cleanup project skeleton and config"
 ```
@@ -187,7 +187,7 @@ def test_load_config_reads_scan_and_paths(tmp_path: Path) -> None:
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cd /Users/minda/ClaudeWork/sv-dropbox/dbx-cleanup
+cd <repo>/dbx-cleanup
 source .venv/bin/activate
 PYTHONPATH=. pytest tests/test_dbx_client.py::test_load_config_reads_scan_and_paths -v
 ```
@@ -266,7 +266,7 @@ Run: `PYTHONPATH=. pytest tests/test_dbx_client.py -v`. Expected: both PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/minda/ClaudeWork/sv-dropbox
+cd <repo>
 git add dbx-cleanup/dbx_client.py dbx-cleanup/tests/test_dbx_client.py
 git commit -m "feat(dbx-cleanup): add config loader"
 ```

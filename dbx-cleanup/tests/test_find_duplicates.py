@@ -94,15 +94,15 @@ def test_should_keep_shared_not_owned_when_flag_disabled() -> None:
     "path, expected_skip",
     [
         # exact-folder match (case-insensitive) and recursive descendants
-        ("/Cetachi Comics/issue1.cbr", True),
-        ("/cetachi comics/issue1.cbr", True),
-        ("/Cetachi Comics/sub/x/y.cbr", True),
+        ("/Old Backups/issue1.cbr", True),
+        ("/old backups/issue1.cbr", True),
+        ("/Old Backups/sub/x/y.cbr", True),
         # not under an ignored folder
         ("/Photos/img.jpg", False),
         # near-match: different folder name that starts with same prefix
-        ("/Cetachi Comics And More/x.cbr", False),
+        ("/Old Backups And More/x.cbr", False),
         # the folder itself (rare, but defensive)
-        ("/Cetachi Comics", True),
+        ("/Old Backups", True),
     ],
 )
 def test_should_skip_file_honors_ignored_folders(path: str, expected_skip: bool) -> None:
@@ -119,7 +119,7 @@ def test_should_skip_file_honors_ignored_folders(path: str, expected_skip: bool)
         skip_hidden=True,
         skip_shared_not_owned=True,
         owner_account_id="self",
-        ignored_folders=("/cetachi comics",),
+        ignored_folders=("/old backups",),
     ) is expected_skip
 
 

@@ -47,7 +47,7 @@ Open `config.ini`. Things you might tune:
 
   ```ini
   ignored_folders =
-      /Cetachi Comics
+      /Old Backups
       /Old Backups
       /Photos/2019/raw
   ```

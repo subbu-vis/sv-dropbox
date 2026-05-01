@@ -22,7 +22,7 @@ The user reviews the CSV between runs and marks an `x` next to files to delete. 
 
 ## Project layout
 
-New folder: `/Users/minda/ClaudeWork/sv-dropbox/dbx-cleanup/`
+New folder: `<repo>/dbx-cleanup/`
 
 ```
 dbx-cleanup/
