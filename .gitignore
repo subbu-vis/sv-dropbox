@@ -5,6 +5,9 @@ dropbox-secrets.md
 .env.*
 !.env.example
 
+# local-only personal configs
+dbx-cleanup/config.local.ini
+
 # foreign clone, not part of this repo
 dbx-mcp-server/
 
