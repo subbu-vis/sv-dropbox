@@ -80,9 +80,9 @@ If the installed SDK differs, adjust call sites in the implementation; tests use
 ### Task 1: Add `[media]` section to config files
 
 **Files:**
-- Modify: `dbx-cleanup/config.ini`
-- Modify: `dbx-cleanup/config.local.ini`
-- Modify: `dbx-cleanup/config.test.ini`
+- Modify: `dbx-cleanup/config.ini` (tracked)
+- Modify: `dbx-cleanup/config.test.ini` (tracked)
+- **Do NOT touch** `dbx-cleanup/config.local.ini` — it's gitignored and contains the user's personal tuning. The user will copy the new `[media]` section from `config.ini` into their `config.local.ini` themselves (documented in the README update in Task 15).
 
 - [ ] **Step 1: Add `[media]` to `dbx-cleanup/config.ini`**
 
@@ -116,11 +116,7 @@ ignored_folders =
     /screenshots
 ```
 
-- [ ] **Step 2: Add the same `[media]` block to `dbx-cleanup/config.local.ini`**
-
-Same content. The user will tune `ignored_folders` and possibly `batch_size` over time.
-
-- [ ] **Step 3: Add a smaller `[media]` block to `dbx-cleanup/config.test.ini`**
+- [ ] **Step 2: Add a smaller `[media]` block to `dbx-cleanup/config.test.ini`**
 
 ```ini
 
@@ -133,12 +129,12 @@ tag_archive_path = ./output/tag-archive-test.json
 ignored_folders =
 ```
 
-(Smaller batch + smaller thumb width = faster tests; PNG kept for completeness even though seed only uses JPEG/MP4.)
+(Smaller batch + smaller thumb width = faster tests. PNG is included because the seed script uploads 1×1 PNG fixtures.)
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add dbx-cleanup/config.ini dbx-cleanup/config.local.ini dbx-cleanup/config.test.ini
+git add dbx-cleanup/config.ini dbx-cleanup/config.test.ini
 git commit -m "config: add [media] section for photo/video tagging"
 ```
 
@@ -2916,7 +2912,15 @@ Same as the duplicates flow: `update_*.py` calls `files_delete_v2`, which moves 
 
 ### Configuration
 
-The `[media]` section of `config.ini` (and your `config.local.ini`) controls:
+The `[media]` section of `config.ini` ships with safe defaults. **Copy it into your `config.local.ini`** the first time you upgrade — the install/commit doesn't touch `config.local.ini` because that file is gitignored and holds your personal tuning. A quick one-liner:
+
+```bash
+# From dbx-cleanup/
+sed -n '/^\[media\]/,$p' config.ini >> config.local.ini
+# Then edit config.local.ini to set your personal [media].ignored_folders
+```
+
+Tunables:
 
 - `photo_extensions` / `video_extensions` — comma-separated lowercase, no dots.
 - `batch_size` — files per HTML page. Default 50; ~1.5 MB at default thumb width.
