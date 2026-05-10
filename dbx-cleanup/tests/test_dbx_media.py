@@ -103,3 +103,86 @@ def test_fold_to_folders_empty() -> None:
 def test_fold_to_folders_root_level() -> None:
     """File at root has parent ''."""
     assert fold_to_folders(["/a.jpg"]) == [("", ["/a.jpg"])]
+
+
+# --- Tests for section 2: Dropbox helpers -------
+
+from unittest.mock import MagicMock
+
+from dbx_media import fetch_existing_tags, fetch_thumbnail, apply_tags
+
+
+def _path_to_tags(path: str, tag_texts: list[str]) -> MagicMock:
+    """Build a fake PathToTags result. tags is a list of objects with .tag_text."""
+    pt = MagicMock()
+    pt.path = path
+    pt.tags = [MagicMock(tag_text=t) for t in tag_texts]
+    return pt
+
+
+def test_fetch_existing_tags_single_batch() -> None:
+    """≤100 paths: one API call, results merged into dict."""
+    client = MagicMock()
+    client.files_tags_get_batch.return_value = MagicMock(paths_to_tags=[
+        _path_to_tags("/a.jpg", []),
+        _path_to_tags("/b.jpg", ["existing"]),
+    ])
+    result = fetch_existing_tags(client, ["/a.jpg", "/b.jpg"])
+    assert result == {"/a.jpg": [], "/b.jpg": ["existing"]}
+    assert client.files_tags_get_batch.call_count == 1
+    client.files_tags_get_batch.assert_called_with(["/a.jpg", "/b.jpg"])
+
+
+def test_fetch_existing_tags_chunks_above_100() -> None:
+    """>100 paths: split into chunks of 100."""
+    paths = [f"/p{i}.jpg" for i in range(250)]
+    client = MagicMock()
+    client.files_tags_get_batch.side_effect = [
+        MagicMock(paths_to_tags=[_path_to_tags(p, []) for p in paths[0:100]]),
+        MagicMock(paths_to_tags=[_path_to_tags(p, []) for p in paths[100:200]]),
+        MagicMock(paths_to_tags=[_path_to_tags(p, []) for p in paths[200:250]]),
+    ]
+    result = fetch_existing_tags(client, paths)
+    assert len(result) == 250
+    assert client.files_tags_get_batch.call_count == 3
+    # Verify each chunk size
+    call_lengths = [len(call.args[0]) for call in client.files_tags_get_batch.call_args_list]
+    assert call_lengths == [100, 100, 50]
+
+
+def test_fetch_existing_tags_empty_input() -> None:
+    """Zero paths: no API call, empty dict."""
+    client = MagicMock()
+    result = fetch_existing_tags(client, [])
+    assert result == {}
+    assert client.files_tags_get_batch.call_count == 0
+
+
+def test_fetch_thumbnail_returns_bytes() -> None:
+    client = MagicMock()
+    response = MagicMock()
+    response.content = b"\xff\xd8\xff\xe0fake-jpeg-bytes"
+    client.files_get_thumbnail_v2.return_value = (MagicMock(), response)
+    result = fetch_thumbnail(client, "/photo.jpg", 480)
+    assert result == b"\xff\xd8\xff\xe0fake-jpeg-bytes"
+
+
+def test_fetch_thumbnail_rejects_unsupported_width() -> None:
+    client = MagicMock()
+    with pytest.raises(ValueError, match="thumbnail width 333 not supported"):
+        fetch_thumbnail(client, "/photo.jpg", 333)
+
+
+def test_apply_tags_adds_each() -> None:
+    client = MagicMock()
+    apply_tags(client, "/photo.jpg", ["a", "b", "c"])
+    assert client.files_tags_add.call_count == 3
+    client.files_tags_add.assert_any_call("/photo.jpg", "a")
+    client.files_tags_add.assert_any_call("/photo.jpg", "b")
+    client.files_tags_add.assert_any_call("/photo.jpg", "c")
+
+
+def test_apply_tags_empty_list_is_noop() -> None:
+    client = MagicMock()
+    apply_tags(client, "/photo.jpg", [])
+    assert client.files_tags_add.call_count == 0

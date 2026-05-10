@@ -67,3 +67,66 @@ def fold_to_folders(paths: list[str]) -> list[tuple[str, list[str]]]:
         parent = p.rsplit("/", 1)[0]
         clusters[parent].append(p)
     return sorted(clusters.items(), key=lambda kv: -len(kv[1]))
+
+
+# --- 2. Dropbox helpers ----------------------------------------------------
+
+# Map thumbnail widths to Dropbox SDK's ThumbnailSize enum values.
+# Built lazily to avoid forcing dropbox import at module-load time in tests
+# that don't need it.
+_THUMBNAIL_SIZE_BY_WIDTH: dict[int, str] = {
+    32: "w32h32",
+    64: "w64h64",
+    128: "w128h128",
+    256: "w256h256",
+    480: "w480h320",
+    640: "w640h480",
+    960: "w960h640",
+    1024: "w1024h768",
+    2048: "w2048h1536",
+}
+
+
+def fetch_existing_tags(client, paths: list[str]) -> dict[str, list[str]]:
+    """Look up native Dropbox tags for each path. Chunks at 100 paths per call
+    (Dropbox's max batch size). Empty input returns empty dict, no API calls.
+
+    Returns {path: [tag_text, ...]}. Paths with no tags map to empty list."""
+    out: dict[str, list[str]] = {}
+    if not paths:
+        return out
+    for i in range(0, len(paths), 100):
+        chunk = paths[i:i + 100]
+        result = client.files_tags_get_batch(chunk)
+        for pt in result.paths_to_tags:
+            out[pt.path] = [t.tag_text for t in pt.tags]
+    return out
+
+
+def fetch_thumbnail(client, path: str, width: int) -> bytes:
+    """Fetch JPEG thumbnail bytes at the given width via files_get_thumbnail_v2."""
+    if width not in _THUMBNAIL_SIZE_BY_WIDTH:
+        raise ValueError(
+            f"thumbnail width {width} not supported; allowed: "
+            f"{sorted(_THUMBNAIL_SIZE_BY_WIDTH.keys())}"
+        )
+    # Imported here so the module loads cleanly in unit tests that mock the client.
+    from dropbox.files import (
+        PathOrLink, ThumbnailFormat, ThumbnailMode, ThumbnailSize,
+    )
+    size_attr = _THUMBNAIL_SIZE_BY_WIDTH[width]
+    _, response = client.files_get_thumbnail_v2(
+        resource=PathOrLink.path(path),
+        format=ThumbnailFormat.jpeg,
+        size=getattr(ThumbnailSize, size_attr),
+        mode=ThumbnailMode.strict,
+    )
+    return response.content
+
+
+def apply_tags(client, path: str, tags_to_add: list[str]) -> None:
+    """Call files_tags_add for each tag. Caller is responsible for deduping
+    against existing tags before calling. Each call is independent — if one
+    fails, others may still succeed (caller decides whether to abort)."""
+    for tag in tags_to_add:
+        client.files_tags_add(path, tag)
