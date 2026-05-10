@@ -5,7 +5,7 @@ import pytest
 
 from dropbox.exceptions import AuthError, RateLimitError
 
-from dbx_client import load_config, MissingTokenError, load_token, with_retry
+from dbx_client import load_config, MissingTokenError, load_token, with_retry, MediaConfig, load_media_config
 
 
 def test_load_config_reads_scan_and_paths(tmp_path: Path) -> None:
@@ -146,3 +146,97 @@ def test_with_retry_handles_none_backoff(monkeypatch: pytest.MonkeyPatch) -> Non
     call.side_effect = [RateLimitError("req-id", MagicMock(), None), "ok"]
     assert with_retry(call) == "ok"
     assert sleep_calls == [1]
+
+
+def test_load_media_config_happy_path(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "config.ini"
+    cfg_path.write_text(
+        "[scan]\n"
+        "min_file_size_bytes = 102400\n"
+        "skip_shared_not_owned = true\n"
+        "skip_hidden = true\n"
+        "early_exit_row_threshold = 1000\n"
+        "max_csv_rows = 100\n"
+        "\n"
+        "[paths]\n"
+        "csv_output_dir = ./output\n"
+        "log_dir = ./logs\n"
+        "\n"
+        "[media]\n"
+        "photo_extensions = jpg,jpeg,png\n"
+        "video_extensions = mp4,mov\n"
+        "batch_size = 50\n"
+        "thumbnail_width = 480\n"
+        "tag_archive_path = ./output/tag-archive.json\n"
+        "ignored_folders =\n"
+        "    /Old Backups\n"
+        "    /Screenshots/\n"
+    )
+
+    mc = load_media_config(cfg_path)
+
+    assert mc.photo_extensions == frozenset({"jpg", "jpeg", "png"})
+    assert mc.video_extensions == frozenset({"mp4", "mov"})
+    assert mc.batch_size == 50
+    assert mc.thumbnail_width == 480
+    assert mc.tag_archive_path == Path("./output/tag-archive.json")
+    assert mc.csv_output_dir == Path("./output")
+    assert mc.log_dir == Path("./logs")
+    assert mc.ignored_folders == ("/old backups", "/screenshots")
+
+
+def test_load_media_config_rejects_bad_thumbnail_width(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "config.ini"
+    cfg_path.write_text(
+        "[scan]\nmin_file_size_bytes=1\nskip_shared_not_owned=true\nskip_hidden=true\n"
+        "early_exit_row_threshold=1\nmax_csv_rows=1\n\n"
+        "[paths]\ncsv_output_dir=./o\nlog_dir=./l\n\n"
+        "[media]\nphoto_extensions=jpg\nvideo_extensions=mp4\nbatch_size=10\n"
+        "thumbnail_width=333\ntag_archive_path=./a.json\nignored_folders=\n"
+    )
+    with pytest.raises(ValueError, match="thumbnail_width must be one of"):
+        load_media_config(cfg_path)
+
+
+def test_load_media_config_rejects_zero_batch_size(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "config.ini"
+    cfg_path.write_text(
+        "[scan]\nmin_file_size_bytes=1\nskip_shared_not_owned=true\nskip_hidden=true\n"
+        "early_exit_row_threshold=1\nmax_csv_rows=1\n\n"
+        "[paths]\ncsv_output_dir=./o\nlog_dir=./l\n\n"
+        "[media]\nphoto_extensions=jpg\nvideo_extensions=mp4\nbatch_size=0\n"
+        "thumbnail_width=480\ntag_archive_path=./a.json\nignored_folders=\n"
+    )
+    with pytest.raises(ValueError, match="batch_size must be positive"):
+        load_media_config(cfg_path)
+
+
+def test_load_media_config_rejects_empty_extension_list(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "config.ini"
+    cfg_path.write_text(
+        "[scan]\nmin_file_size_bytes=1\nskip_shared_not_owned=true\nskip_hidden=true\n"
+        "early_exit_row_threshold=1\nmax_csv_rows=1\n\n"
+        "[paths]\ncsv_output_dir=./o\nlog_dir=./l\n\n"
+        "[media]\nphoto_extensions=\nvideo_extensions=mp4\nbatch_size=10\n"
+        "thumbnail_width=480\ntag_archive_path=./a.json\nignored_folders=\n"
+    )
+    with pytest.raises(ValueError, match="photo_extensions must not be empty"):
+        load_media_config(cfg_path)
+
+
+def test_load_media_config_independent_ignored_folders(tmp_path: Path) -> None:
+    """[media].ignored_folders and [scan].ignored_folders parsed independently."""
+    cfg_path = tmp_path / "config.ini"
+    cfg_path.write_text(
+        "[scan]\nmin_file_size_bytes=1\nskip_shared_not_owned=true\nskip_hidden=true\n"
+        "early_exit_row_threshold=1\nmax_csv_rows=1\n"
+        "ignored_folders =\n    /scan-only\n\n"
+        "[paths]\ncsv_output_dir=./o\nlog_dir=./l\n\n"
+        "[media]\nphoto_extensions=jpg\nvideo_extensions=mp4\nbatch_size=10\n"
+        "thumbnail_width=480\ntag_archive_path=./a.json\n"
+        "ignored_folders =\n    /media-only\n"
+    )
+    scan_cfg = load_config(cfg_path)
+    media_cfg = load_media_config(cfg_path)
+    assert scan_cfg.ignored_folders == ("/scan-only",)
+    assert media_cfg.ignored_folders == ("/media-only",)

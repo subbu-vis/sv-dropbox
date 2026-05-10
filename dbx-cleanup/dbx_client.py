@@ -112,3 +112,61 @@ def with_retry(call: Callable[[], T], max_attempts: int = 3) -> T:
             raise
     assert last_error is not None
     raise last_error
+
+
+# Thumbnail widths that Dropbox's files_get_thumbnail_v2 supports.
+ALLOWED_THUMBNAIL_WIDTHS = frozenset({32, 64, 128, 256, 480, 640, 960, 1024, 2048})
+
+
+@dataclass(frozen=True)
+class MediaConfig:
+    photo_extensions: frozenset[str]
+    video_extensions: frozenset[str]
+    batch_size: int
+    thumbnail_width: int
+    tag_archive_path: Path
+    csv_output_dir: Path
+    log_dir: Path
+    ignored_folders: tuple[str, ...]
+
+
+def _parse_extensions(raw: str, field_name: str) -> frozenset[str]:
+    """Parse a comma-separated extension list. Lowercases, strips, rejects empty input
+    and any entry with a leading dot."""
+    items = [s.strip().lower() for s in raw.split(",")]
+    items = [s for s in items if s]
+    if not items:
+        raise ValueError(f"{field_name} must not be empty")
+    for ext in items:
+        if ext.startswith("."):
+            raise ValueError(f"{field_name} entries must not start with '.': {ext!r}")
+    return frozenset(items)
+
+
+def load_media_config(path: Path) -> MediaConfig:
+    parser = configparser.ConfigParser()
+    if not path.exists():
+        raise FileNotFoundError(f"Config file not found: {path}")
+    parser.read(path)
+    media = parser["media"]
+    paths = parser["paths"]
+
+    thumbnail_width = media.getint("thumbnail_width")
+    if thumbnail_width not in ALLOWED_THUMBNAIL_WIDTHS:
+        allowed = ", ".join(str(w) for w in sorted(ALLOWED_THUMBNAIL_WIDTHS))
+        raise ValueError(f"thumbnail_width must be one of: {allowed}; got {thumbnail_width}")
+
+    batch_size = media.getint("batch_size")
+    if batch_size <= 0:
+        raise ValueError(f"batch_size must be positive, got {batch_size}")
+
+    return MediaConfig(
+        photo_extensions=_parse_extensions(media.get("photo_extensions", ""), "photo_extensions"),
+        video_extensions=_parse_extensions(media.get("video_extensions", ""), "video_extensions"),
+        batch_size=batch_size,
+        thumbnail_width=thumbnail_width,
+        tag_archive_path=Path(media["tag_archive_path"]),
+        csv_output_dir=Path(paths["csv_output_dir"]),
+        log_dir=Path(paths["log_dir"]),
+        ignored_folders=_parse_ignored_folders(media.get("ignored_folders", "")),
+    )
