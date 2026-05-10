@@ -130,3 +130,58 @@ def apply_tags(client, path: str, tags_to_add: list[str]) -> None:
     fails, others may still succeed (caller decides whether to abort)."""
     for tag in tags_to_add:
         client.files_tags_add(path, tag)
+
+
+# --- 3. Tag archive I/O ----------------------------------------------------
+
+import json
+from pathlib import Path
+
+
+ArchiveEntry = dict  # {content_hash, tags, last_updated, [deleted_at]}
+Archive = dict[str, ArchiveEntry]
+
+
+def load_archive(path: Path) -> Archive:
+    """Load the JSON archive. Returns empty dict if the file doesn't exist
+    (first-run case)."""
+    if not path.exists():
+        return {}
+    with path.open() as f:
+        return json.load(f)
+
+
+def save_archive(path: Path, archive: Archive) -> None:
+    """Atomically write the archive. Sorted keys + indent=2 for readable diffs."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as f:
+        json.dump(archive, f, sort_keys=True, indent=2)
+
+
+def merge_tagged(
+    archive: Archive,
+    path: str,
+    content_hash: str,
+    new_tags: list[str],
+    timestamp: str,
+) -> None:
+    """Union new_tags into archive[path].tags. Updates content_hash and
+    last_updated. Creates the entry if it doesn't exist."""
+    existing = archive.get(path, {})
+    existing_tags = existing.get("tags", [])
+    merged = sorted(set(existing_tags) | set(new_tags))
+    archive[path] = {
+        "content_hash": content_hash,
+        "tags": merged,
+        "last_updated": timestamp,
+    }
+    # Preserve deleted_at if it was set previously (file was deleted then restored).
+    if "deleted_at" in existing:
+        archive[path]["deleted_at"] = existing["deleted_at"]
+
+
+def merge_deleted(archive: Archive, path: str, timestamp: str) -> None:
+    """Mark an existing entry as deleted. No-op if path is not already in archive."""
+    if path not in archive:
+        return
+    archive[path]["deleted_at"] = timestamp

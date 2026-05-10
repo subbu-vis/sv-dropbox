@@ -186,3 +186,96 @@ def test_apply_tags_empty_list_is_noop() -> None:
     client = MagicMock()
     apply_tags(client, "/photo.jpg", [])
     assert client.files_tags_add.call_count == 0
+
+
+# --- Tests for section 3: Tag archive I/O -------
+
+import json
+from pathlib import Path
+
+from dbx_media import load_archive, save_archive, merge_tagged, merge_deleted
+
+
+def test_load_archive_missing_file_returns_empty(tmp_path: Path) -> None:
+    """When the JSON file doesn't exist yet, return empty dict (first-run case)."""
+    assert load_archive(tmp_path / "tag-archive.json") == {}
+
+
+def test_load_archive_reads_existing(tmp_path: Path) -> None:
+    p = tmp_path / "tag-archive.json"
+    p.write_text(json.dumps({
+        "/a.jpg": {"content_hash": "h1", "tags": ["x"], "last_updated": "2026-05-10T10:00:00"}
+    }))
+    archive = load_archive(p)
+    assert archive == {
+        "/a.jpg": {"content_hash": "h1", "tags": ["x"], "last_updated": "2026-05-10T10:00:00"}
+    }
+
+
+def test_save_archive_creates_parent_dir(tmp_path: Path) -> None:
+    target = tmp_path / "nested" / "deeper" / "tag-archive.json"
+    save_archive(target, {"/a.jpg": {"content_hash": "h", "tags": [], "last_updated": "now"}})
+    assert target.exists()
+    assert json.loads(target.read_text()) == {
+        "/a.jpg": {"content_hash": "h", "tags": [], "last_updated": "now"}
+    }
+
+
+def test_save_archive_writes_sorted_keys_and_indented(tmp_path: Path) -> None:
+    """Sorted keys + indent=2 makes the file human-readable and diff-friendly."""
+    target = tmp_path / "tag-archive.json"
+    save_archive(target, {
+        "/z.jpg": {"content_hash": "h2", "tags": [], "last_updated": "now"},
+        "/a.jpg": {"content_hash": "h1", "tags": [], "last_updated": "now"},
+    })
+    text = target.read_text()
+    assert text.index('"/a.jpg"') < text.index('"/z.jpg"')
+    assert "\n  " in text  # indented
+
+
+def test_merge_tagged_new_entry() -> None:
+    archive: dict[str, dict] = {}
+    merge_tagged(archive, "/a.jpg", "hash1", ["x", "y"], "2026-05-10T10:00:00")
+    assert archive == {
+        "/a.jpg": {"content_hash": "hash1", "tags": ["x", "y"],
+                   "last_updated": "2026-05-10T10:00:00"}
+    }
+
+
+def test_merge_tagged_unions_existing_tags() -> None:
+    archive = {
+        "/a.jpg": {"content_hash": "h", "tags": ["a", "b"], "last_updated": "older"}
+    }
+    merge_tagged(archive, "/a.jpg", "h", ["b", "c"], "newer")
+    assert archive["/a.jpg"]["tags"] == ["a", "b", "c"]  # sorted union
+    assert archive["/a.jpg"]["last_updated"] == "newer"
+
+
+def test_merge_tagged_updates_content_hash_if_changed() -> None:
+    """If the file's content_hash changed (re-tagged after edit), update it."""
+    archive = {
+        "/a.jpg": {"content_hash": "old_hash", "tags": ["x"], "last_updated": "older"}
+    }
+    merge_tagged(archive, "/a.jpg", "new_hash", ["y"], "newer")
+    assert archive["/a.jpg"]["content_hash"] == "new_hash"
+    assert archive["/a.jpg"]["tags"] == ["x", "y"]
+
+
+def test_merge_deleted_with_existing_entry() -> None:
+    archive = {
+        "/a.jpg": {"content_hash": "h", "tags": ["x"], "last_updated": "older"}
+    }
+    merge_deleted(archive, "/a.jpg", "2026-05-10T11:00:00")
+    assert archive["/a.jpg"] == {
+        "content_hash": "h",
+        "tags": ["x"],
+        "last_updated": "older",
+        "deleted_at": "2026-05-10T11:00:00",
+    }
+
+
+def test_merge_deleted_no_prior_entry_is_noop() -> None:
+    """Per spec: deleting a never-tagged path does NOT create an archive entry."""
+    archive: dict[str, dict] = {}
+    merge_deleted(archive, "/never-tagged.jpg", "2026-05-10T11:00:00")
+    assert archive == {}
