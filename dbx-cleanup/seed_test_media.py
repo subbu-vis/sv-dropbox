@@ -3,7 +3,7 @@ tagging scripts can be exercised end-to-end against real Dropbox.
 
 Idempotent: clears /test-media/ before populating.
 
-The "photos" are tiny 1×1 PNGs (67 bytes each, well-known canonical encoding).
+The "photos" are tiny 1×1 PNGs (69 bytes each, well-known canonical encoding).
 PNG works fine with Dropbox's tagging and thumbnail APIs — and the project's
 default config has `png` in [media].photo_extensions, as does config.test.ini.
 
