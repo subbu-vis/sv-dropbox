@@ -214,3 +214,144 @@ def build_html(
 
     parts.append(_HTML_TEMPLATE_TAIL)
     return "".join(parts)
+
+
+import argparse
+import sys
+from datetime import datetime
+from pathlib import Path
+
+import dropbox  # noqa: F401  (kept for type clarity at the run() boundary)
+from dropbox.exceptions import AuthError
+from dropbox.files import FileMetadata, ListFolderResult
+
+from dbx_client import MissingTokenError, get_client, load_media_config, load_token, with_retry
+from dbx_media import classify_media, fetch_existing_tags, fetch_thumbnail, fold_to_folders
+
+
+def _walk_candidates(
+    client,
+    root: str,
+    photo_exts: frozenset[str],
+    video_exts: frozenset[str],
+    kind: Literal["image", "video"],
+    ignored_folders: tuple[str, ...],
+) -> list[tuple[str, str]]:
+    """Walk Dropbox under `root`, return [(path, content_hash), ...] for files
+    matching `kind`, excluding hidden segments and ignored folders."""
+    want = "photo" if kind == "image" else "video"
+    list_path = "" if root == "/" else root.rstrip("/")
+    out: list[tuple[str, str]] = []
+    result: ListFolderResult = with_retry(
+        lambda: client.files_list_folder(list_path, recursive=True)
+    )
+    while True:
+        for entry in result.entries:
+            if not isinstance(entry, FileMetadata):
+                continue
+            if entry.content_hash is None:
+                continue
+            if any(seg.startswith(".") for seg in entry.path_display.split("/")):
+                continue
+            path_lower = entry.path_display.lower()
+            if any(path_lower == f or path_lower.startswith(f + "/") for f in ignored_folders):
+                continue
+            if classify_media(entry.path_display, photo_exts, video_exts) == want:
+                out.append((entry.path_display, entry.content_hash))
+        if not result.has_more:
+            break
+        cursor = result.cursor
+        result = with_retry(lambda c=cursor: client.files_list_folder_continue(c))
+    return out
+
+
+def _write_empty_html(mc, kind: Literal["image", "video"]) -> int:
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    file_ts = datetime.now().strftime("%Y-%m-%d-%H%M")
+    suffix = "images" if kind == "image" else "videos"
+    html = build_html(entries=[], kind=kind, timestamp=timestamp)
+    out_path = mc.csv_output_dir / f"tag-batch-{suffix}-{file_ts}.html"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(html)
+    print(f"No untagged {suffix} in scope. Wrote empty page to {out_path}")
+    return 0
+
+
+def run(kind: Literal["image", "video"]) -> int:
+    parser = argparse.ArgumentParser(
+        description=f"Build a tag-review batch for {'photos' if kind == 'image' else 'videos'}."
+    )
+    parser.add_argument("--config", default="config.ini")
+    parser.add_argument("--root", default="/", help="Dropbox path to scan (default: /)")
+    args = parser.parse_args()
+
+    root = args.root.strip()
+    if not root.startswith("/"):
+        root = "/" + root
+
+    try:
+        mc = load_media_config(Path(args.config))
+        token = load_token()
+        client = get_client(token)
+    except FileNotFoundError as exc:
+        print(f"Config error: {exc}", file=sys.stderr); return 1
+    except MissingTokenError as exc:
+        print(f"Token error: {exc}", file=sys.stderr); return 1
+    except AuthError as exc:
+        print(f"Dropbox auth failed: {exc}.", file=sys.stderr); return 1
+
+    print(f"Walking Dropbox under {root}...")
+    candidates = _walk_candidates(client, root, mc.photo_extensions, mc.video_extensions,
+                                   kind, mc.ignored_folders)
+    print(f"  found {len(candidates)} candidate {'photos' if kind == 'image' else 'videos'}")
+
+    if not candidates:
+        return _write_empty_html(mc, kind)
+
+    print("Looking up existing tags...")
+    paths = [p for p, _ in candidates]
+    tags_by_path = fetch_existing_tags(client, paths)
+    untagged_paths = filter_untagged(paths, tags_by_path)
+    print(f"  {len(untagged_paths)} untagged")
+
+    if not untagged_paths:
+        return _write_empty_html(mc, kind)
+
+    # Map back to (path, content_hash) only for untagged.
+    hash_by_path = {p: h for p, h in candidates}
+    folded = fold_to_folders(untagged_paths)
+    selected_paths = select_batch(folded, mc.batch_size)
+    print(f"  selected {len(selected_paths)} for this batch (batch_size={mc.batch_size})")
+
+    print("Fetching thumbnails...")
+    entries: list[BatchEntry] = []
+    for i, p in enumerate(selected_paths, start=1):
+        try:
+            thumb = fetch_thumbnail(client, p, mc.thumbnail_width)
+        except AuthError:
+            raise
+        except Exception as exc:
+            print(f"  WARN: thumbnail failed for {p}: {exc}", file=sys.stderr)
+            continue
+        entries.append(BatchEntry(
+            path=p,
+            filename=p.rsplit("/", 1)[-1],
+            content_hash=hash_by_path[p],
+            existing_tags=tags_by_path.get(p, []),
+            thumbnail_bytes=thumb,
+        ))
+        if i % 10 == 0:
+            print(f"    {i}/{len(selected_paths)}")
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    file_ts = datetime.now().strftime("%Y-%m-%d-%H%M")
+    html = build_html(entries=entries, kind=kind, timestamp=timestamp)
+
+    suffix = "images" if kind == "image" else "videos"
+    out_path = mc.csv_output_dir / f"tag-batch-{suffix}-{file_ts}.html"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(html)
+    print(f"\nWrote {len(entries)} {suffix} to {out_path}")
+    print(f"Open in browser, edit tags, click 'Export', then run:")
+    print(f"  python update_{suffix}.py --config {args.config} --csv {out_path.with_suffix('.edited.csv')}")
+    return 0

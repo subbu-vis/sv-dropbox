@@ -138,3 +138,89 @@ def test_build_html_escapes_html_special_chars() -> None:
     html = build_html(entries=entries, kind="image", timestamp="2026-05-10 14:32")
     # The raw string should NOT appear unescaped in the HTML body.
     assert "<weird&name>" not in html or "&lt;weird&amp;name&gt;" in html
+
+
+from unittest.mock import MagicMock
+from pathlib import Path
+
+from dropbox.files import FileMetadata
+
+
+def _fake_file_meta(name: str, path: str, content_hash: str) -> MagicMock:
+    """Build a MagicMock(spec=FileMetadata) so isinstance() returns True
+    in the production code under test."""
+    m = MagicMock(spec=FileMetadata)
+    m.name = name
+    m.path_display = path
+    m.content_hash = content_hash
+    m.size = 1000
+    return m
+
+
+def _path_to_tags_mock(path: str, tag_texts: list[str]) -> MagicMock:
+    pt = MagicMock()
+    pt.path = path
+    pt.tags = [MagicMock(tag_text=t) for t in tag_texts]
+    return pt
+
+
+def test_run_end_to_end_with_mocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Full orchestration: walk → tag-lookup → filter → fold → pack → thumb → html."""
+    from get_media import run
+
+    # Config file in tmp_path so load_media_config works.
+    cfg_path = tmp_path / "config.ini"
+    cfg_path.write_text(
+        "[scan]\nmin_file_size_bytes=1\nskip_shared_not_owned=true\nskip_hidden=true\n"
+        "early_exit_row_threshold=1\nmax_csv_rows=1\nignored_folders=\n\n"
+        "[paths]\n"
+        f"csv_output_dir={tmp_path}/output\n"
+        f"log_dir={tmp_path}/logs\n\n"
+        "[media]\nphoto_extensions=jpg\nvideo_extensions=mp4\nbatch_size=5\n"
+        "thumbnail_width=480\n"
+        f"tag_archive_path={tmp_path}/archive.json\n"
+        "ignored_folders=\n"
+    )
+
+    client = MagicMock()
+    # files_list_folder result: three jpgs and one non-FileMetadata entry.
+    page = MagicMock()
+    page.entries = [
+        _fake_file_meta("a.jpg", "/x/a.jpg", "h1"),
+        _fake_file_meta("b.jpg", "/x/b.jpg", "h2"),
+        _fake_file_meta("c.jpg", "/y/c.jpg", "h3"),
+        MagicMock(spec=object),  # isinstance() FileMetadata fails -> skipped
+    ]
+    page.has_more = False
+    client.files_list_folder.return_value = page
+
+    # files_tags_get_batch: a.jpg untagged, b.jpg already tagged, c.jpg untagged.
+    client.files_tags_get_batch.return_value = MagicMock(paths_to_tags=[
+        _path_to_tags_mock("/x/a.jpg", []),
+        _path_to_tags_mock("/x/b.jpg", ["existing"]),
+        _path_to_tags_mock("/y/c.jpg", []),
+    ])
+
+    # files_get_thumbnail_v2: return fake bytes for any path.
+    thumb_response = MagicMock()
+    thumb_response.content = b"\xff\xd8FAKE"
+    client.files_get_thumbnail_v2.return_value = (MagicMock(), thumb_response)
+
+    # Mock auth + client builder at the get_media import points.
+    monkeypatch.setattr("get_media.get_client", lambda token: client)
+    monkeypatch.setattr("get_media.load_token", lambda: "fake-token")
+
+    # CLI args.
+    monkeypatch.setattr("sys.argv", ["get_images.py", "--config", str(cfg_path), "--root", "/"])
+
+    rc = run(kind="image")
+    assert rc == 0
+
+    # An HTML file should be produced under csv_output_dir.
+    html_files = list((tmp_path / "output").glob("tag-batch-*.html"))
+    assert len(html_files) == 1
+    html_text = html_files[0].read_text()
+    # b.jpg was already tagged -> excluded; a.jpg and c.jpg included.
+    assert "/x/a.jpg" in html_text
+    assert "/x/b.jpg" not in html_text
+    assert "/y/c.jpg" in html_text
