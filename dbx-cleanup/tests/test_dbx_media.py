@@ -129,30 +129,30 @@ def _path_to_tags(path: str, tag_texts: list[str]) -> MagicMock:
 def test_fetch_existing_tags_single_batch() -> None:
     """≤100 paths: one API call, results merged into dict."""
     client = MagicMock()
-    client.files_tags_get_batch.return_value = MagicMock(paths_to_tags=[
+    client.files_tags_get.return_value = MagicMock(paths_to_tags=[
         _path_to_tags("/a.jpg", []),
         _path_to_tags("/b.jpg", ["existing"]),
     ])
     result = fetch_existing_tags(client, ["/a.jpg", "/b.jpg"])
     assert result == {"/a.jpg": [], "/b.jpg": ["existing"]}
-    assert client.files_tags_get_batch.call_count == 1
-    client.files_tags_get_batch.assert_called_with(["/a.jpg", "/b.jpg"])
+    assert client.files_tags_get.call_count == 1
+    client.files_tags_get.assert_called_with(["/a.jpg", "/b.jpg"])
 
 
 def test_fetch_existing_tags_chunks_above_100() -> None:
     """>100 paths: split into chunks of 100."""
     paths = [f"/p{i}.jpg" for i in range(250)]
     client = MagicMock()
-    client.files_tags_get_batch.side_effect = [
+    client.files_tags_get.side_effect = [
         MagicMock(paths_to_tags=[_path_to_tags(p, []) for p in paths[0:100]]),
         MagicMock(paths_to_tags=[_path_to_tags(p, []) for p in paths[100:200]]),
         MagicMock(paths_to_tags=[_path_to_tags(p, []) for p in paths[200:250]]),
     ]
     result = fetch_existing_tags(client, paths)
     assert len(result) == 250
-    assert client.files_tags_get_batch.call_count == 3
+    assert client.files_tags_get.call_count == 3
     # Verify each chunk size
-    call_lengths = [len(call.args[0]) for call in client.files_tags_get_batch.call_args_list]
+    call_lengths = [len(call.args[0]) for call in client.files_tags_get.call_args_list]
     assert call_lengths == [100, 100, 50]
 
 
@@ -161,7 +161,7 @@ def test_fetch_existing_tags_empty_input() -> None:
     client = MagicMock()
     result = fetch_existing_tags(client, [])
     assert result == {}
-    assert client.files_tags_get_batch.call_count == 0
+    assert client.files_tags_get.call_count == 0
 
 
 def test_fetch_thumbnail_returns_bytes() -> None:

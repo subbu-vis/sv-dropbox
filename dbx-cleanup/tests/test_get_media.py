@@ -194,8 +194,8 @@ def test_run_end_to_end_with_mocks(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     page.has_more = False
     client.files_list_folder.return_value = page
 
-    # files_tags_get_batch: a.jpg untagged, b.jpg already tagged, c.jpg untagged.
-    client.files_tags_get_batch.return_value = MagicMock(paths_to_tags=[
+    # files_tags_get: a.jpg untagged, b.jpg already tagged, c.jpg untagged.
+    client.files_tags_get.return_value = MagicMock(paths_to_tags=[
         _path_to_tags_mock("/x/a.jpg", []),
         _path_to_tags_mock("/x/b.jpg", ["existing"]),
         _path_to_tags_mock("/y/c.jpg", []),

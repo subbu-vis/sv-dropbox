@@ -103,7 +103,7 @@ def fetch_existing_tags(client, paths: list[str]) -> dict[str, list[str]]:
         return out
     for i in range(0, len(paths), 100):
         chunk = paths[i:i + 100]
-        result = client.files_tags_get_batch(chunk)
+        result = client.files_tags_get(chunk)
         for pt in result.paths_to_tags:
             out[pt.path] = [t.tag_text for t in pt.tags]
     return out
