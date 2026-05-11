@@ -47,6 +47,8 @@ cp config.ini config.local.ini
 # then edit config.local.ini with your real ignored_folders and any tuning
 ```
 
+***VERY IMPORTANT***
+
 From here on, **always pass `--config config.local.ini`** to every command. If you forget the flag, the scripts fall back to the generic `config.ini` and will scan folders you wanted to skip.
 
 Things you might tune in `config.local.ini`:
@@ -211,6 +213,156 @@ The only config setting it reads is `[paths].csv_output_dir`. The scan itself is
 2. Find the file → **Restore**
 
 Retention: 30 days on free / Plus, 180 days on Professional / Business.
+
+## Tagging photos and videos
+
+Five additional scripts let you assign native Dropbox tags to photos and videos in batches, with a self-contained HTML review page and a portable JSON archive.
+
+- `count_media.py` — prints total photo/video counts. Read-only.
+- `get_images.py` / `get_videos.py` — produce an HTML page with thumbnails + tag-input fields for the next batch of untagged media.
+- `update_images.py` / `update_videos.py` — apply edited tags to Dropbox and optionally delete flagged files; merge into a local JSON archive.
+
+### How it works
+
+**`get_images.py`** (and the video equivalent):
+
+1. Walks Dropbox under `--root` (default `/`), filtering by extensions in `[media].photo_extensions` and skipping `[media].ignored_folders` + hidden paths.
+2. Looks up every candidate's current native Dropbox tags via `files_tags_get_batch` (chunked at 100 paths/call).
+3. Drops files that already have tags.
+4. Folder-clusters the rest and packs up to `[media].batch_size` files into the batch.
+5. Downloads a thumbnail at `[media].thumbnail_width` per file.
+6. Writes `output/tag-batch-images-YYYY-MM-DD-HHMM.html` — a single self-contained file with base64-embedded thumbs, per-folder "Apply to all" controls, and an Export button.
+
+**You** open the HTML in your browser, fill in tags (comma-separated), optionally check "mark for deletion" on a row, and click "Export". The browser downloads `tag-batch-images-YYYY-MM-DD-HHMM.edited.csv`.
+
+**`update_images.py`** then validates and applies:
+
+| Validation | What it catches |
+|---|---|
+| `PATH_NOT_FOUND` | File moved/renamed/deleted since the batch was generated |
+| `HASH_CHANGED` | File content changed since the batch was generated |
+| `CONFLICT_TAG_AND_DELETE` | A single row has both `new_tags` and `delete=x` |
+| `INVALID_TAG` | A tag fails Dropbox's rules (a-z, 0-9, hyphens, 1-32 chars) after normalization |
+| `TOO_MANY_TAGS` | Existing + new tags would exceed Dropbox's 20-per-file cap |
+| `EXCEEDS_MAX_ROWS` | The CSV has more rows than `[media].batch_size` |
+
+All validations run to completion; if any fails the whole batch aborts (exit 2). On success, the user types `yes`, then each row is either tagged (deduped against existing) or moved to the recycle bin. Errors on individual rows continue the batch; `AuthError` aborts immediately.
+
+After the run, three artifacts:
+- `output/tag-archive.json` — the persistent local archive, keyed by Dropbox path. Survives a future migration away from Dropbox.
+- `logs/tag-log-YYYY-MM-DD-HHMM.csv` — per-row audit (timestamp, path, action, tags added/skipped, response).
+- The Dropbox files themselves now carry their new tags, searchable in the web UI as `tag:diwali-2019`.
+
+### Tag input format
+
+Tags in the HTML are comma-separated. The script normalizes each one before sending to Dropbox:
+- Leading `#` is stripped (so `#seema` and `seema` both work)
+- Lowercased
+- Internal whitespace runs become single hyphens (so `Diwali 2019` → `diwali-2019`)
+- Validated: a-z, 0-9, hyphens only; 1-32 chars
+
+Anything still failing after normalization is rejected at pre-flight validation; the original value is named in the error log so you can fix the CSV and re-run.
+
+### Test before unleashing (tagging)
+
+```bash
+# 1. Seed /test-media/ with known fixtures (4 photos + 1 video + 1 PDF)
+python seed_test_media.py
+
+# 2. Count — expect "Photos: 4" and "Videos: 1" (PDF excluded)
+python count_media.py --config config.test.ini --root /test-media
+
+# 3. Build a photo batch
+python get_images.py --config config.test.ini --root /test-media
+#    → output/tag-batch-images-<ts>.html (3 untagged photos; photo3.png excluded
+#    because seed_test_media.py pre-tagged it).
+
+# 4. Open the HTML in your browser. Expected:
+#    - 2 folder sections (eventA, eventB), each with an "Apply to all" control
+#    - 3 thumbnails (~256 px wide at test config)
+#    - existing tags shown as "(none)" for each row
+#
+#    Add tags to TWO of the rows. Mark the THIRD row 'x' for deletion
+#    (leave its new-tags input blank — a single row can't be both tagged AND deleted).
+#    Click "Export edited CSV".
+
+# 5. Apply the edits
+python update_images.py --config config.test.ini \
+    --csv output/tag-batch-images-<ts>.edited.csv
+
+# 6. Verify in the Dropbox web UI:
+#    - The two tagged photos now show their new tags next to the filename
+#    - The 'x'-marked file is in "Deleted files"
+#    - eventA/photo3.png is unchanged (was excluded; was already-tagged)
+
+# 7. Verify locally:
+#    - output/tag-archive-test.json has 2 entries
+#    - logs/tag-log-<ts>.csv shows 2 tagged + 1 deleted + 0 errors
+
+# 8. Repeat for videos
+python get_videos.py --config config.test.ini --root /test-media
+python update_videos.py --config config.test.ini \
+    --csv output/tag-batch-videos-<ts>.edited.csv
+
+# 9. Validation drill: open one of the exported CSVs again, mark a row with
+#    BOTH new_tags AND delete=x. Re-run update_images.py — should abort
+#    with CONFLICT_TAG_AND_DELETE (exit 2), no Dropbox writes.
+```
+
+### Real usage
+
+```bash
+# Daily count — quick read-only stat
+python count_media.py --config config.local.ini
+
+# Build a batch (default 50 photos, untagged-first, folder-clustered)
+python get_images.py --config config.local.ini
+
+# (Optional) narrow to a specific subtree
+python get_images.py --config config.local.ini --root /Photos/2019
+
+# Open the HTML, tag and/or mark for deletion, click Export.
+# Then apply:
+python update_images.py --config config.local.ini --csv output/tag-batch-images-<ts>.edited.csv
+
+# Videos: same pattern
+python get_videos.py --config config.local.ini
+python update_videos.py --config config.local.ini --csv output/tag-batch-videos-<ts>.edited.csv
+
+# Repeat. Each get_* run produces a fresh batch of the next 50 untagged files.
+# When all of /Photos/2019 is tagged, the HTML will say "No untagged photos in scope"
+# and the file will be empty.
+```
+
+### Output files
+
+- `output/tag-batch-images-YYYY-MM-DD-HHMM.html` — review page (gitignored)
+- `output/tag-batch-images-YYYY-MM-DD-HHMM.edited.csv` — your saved input (gitignored)
+- `output/tag-archive.json` — persistent archive of every tag this tool has applied (gitignored)
+- `logs/tag-log-YYYY-MM-DD-HHMM.csv` — per-row audit
+- `logs/error-YYYY-MM-DD-HHMM.log` — written on pre-flight failure
+
+### Recovering deleted files
+
+Same as the duplicates flow: `update_*.py` calls `files_delete_v2`, which moves files to "Deleted files" (recycle bin). Restore from the web UI; retention depends on your Dropbox plan.
+
+### Configuration
+
+The `[media]` section of `config.ini` ships with safe defaults. **Copy it into your `config.local.ini`** the first time you upgrade — the install/commit doesn't touch `config.local.ini` because that file is gitignored and holds your personal tuning. A quick one-liner:
+
+```bash
+# From dbx-cleanup/
+sed -n '/^\[media\]/,$p' config.ini >> config.local.ini
+# Then edit config.local.ini to set your personal [media].ignored_folders
+```
+
+Tunables:
+
+- `photo_extensions` / `video_extensions` — comma-separated lowercase, no dots.
+- `batch_size` — files per HTML page. Default 50; ~1.5 MB at default thumb width.
+- `thumbnail_width` — one of 32, 64, 128, 256, 480, 640, 960, 1024, 2048. Default 480.
+- `tag_archive_path` — where the persistent JSON archive lives.
+- `ignored_folders` — separate from `[scan].ignored_folders`. Folders you skip during a *tag* pass are usually different from folders you skip during a *duplicate* pass.
 
 ## Tests
 

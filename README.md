@@ -1,8 +1,9 @@
 # sv-dropbox
 
-A small toolkit for cleaning up a personal Dropbox account at scale. Today the repo contains one tool:
+A small toolkit for cleaning up a personal Dropbox account at scale. Today the repo contains two tools:
 
 - **[`dbx-cleanup/`](./dbx-cleanup/)** — Python scripts that find byte-identical duplicate files anywhere in your Dropbox, let you review them in a CSV, and then delete the ones you mark. Also includes a read-only folder-size audit.
+- **Tag photos and videos** with native Dropbox tags for searchability. Build a batch with `get_images.py` / `get_videos.py`, review thumbnails in a self-contained HTML page, apply with `update_images.py` / `update_videos.py`. A local JSON archive at `dbx-cleanup/output/tag-archive.json` is a portable export — if you ever leave Dropbox, your tagging work goes with you. See [Tagging photos and videos](./dbx-cleanup/README.md#tagging-photos-and-videos).
 
 If you've got a Dropbox that has grown into the hundreds of GB over a decade and you want to claw back space without trusting a black-box "clean my drive" button, this is for you.
 
@@ -92,8 +93,17 @@ sv-dropbox/
     ├── find_duplicates.py
     ├── delete_duplicates.py
     ├── dbx_folder_sizes.py
+    ├── count_media.py
+    ├── get_images.py
+    ├── get_videos.py
+    ├── update_images.py
+    ├── update_videos.py
     ├── dbx_client.py
+    ├── dbx_media.py
+    ├── get_media.py
+    ├── update_media.py
     ├── seed_test_data.py
+    ├── seed_test_media.py
     ├── config.ini
     ├── config.test.ini
     ├── .env.example
