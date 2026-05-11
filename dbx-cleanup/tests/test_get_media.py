@@ -158,9 +158,16 @@ def _fake_file_meta(name: str, path: str, content_hash: str) -> MagicMock:
 
 
 def _path_to_tags_mock(path: str, tag_texts: list[str]) -> MagicMock:
+    """Tag is a stone union: .is_user_generated_tag() / .get_user_generated_tag()."""
+    def _fake(text: str) -> MagicMock:
+        inner = MagicMock(); inner.tag_text = text
+        t = MagicMock()
+        t.is_user_generated_tag.return_value = True
+        t.get_user_generated_tag.return_value = inner
+        return t
     pt = MagicMock()
     pt.path = path
-    pt.tags = [MagicMock(tag_text=t) for t in tag_texts]
+    pt.tags = [_fake(t) for t in tag_texts]
     return pt
 
 

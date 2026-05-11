@@ -105,7 +105,14 @@ def fetch_existing_tags(client, paths: list[str]) -> dict[str, list[str]]:
         chunk = paths[i:i + 100]
         result = client.files_tags_get(chunk)
         for pt in result.paths_to_tags:
-            out[pt.path] = [t.tag_text for t in pt.tags]
+            # `Tag` is a stone union type with one case so far: user_generated_tag.
+            # The text lives at .get_user_generated_tag().tag_text — not directly
+            # on the Tag wrapper.
+            out[pt.path] = [
+                t.get_user_generated_tag().tag_text
+                for t in pt.tags
+                if t.is_user_generated_tag()
+            ]
     return out
 
 

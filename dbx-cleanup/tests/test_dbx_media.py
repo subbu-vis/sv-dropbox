@@ -118,11 +118,22 @@ from unittest.mock import MagicMock
 from dbx_media import fetch_existing_tags, fetch_thumbnail, apply_tags
 
 
+def _fake_tag(text: str) -> MagicMock:
+    """Build a fake stone union Tag. Real Tag exposes is_user_generated_tag()
+    and get_user_generated_tag() which returns an object with .tag_text."""
+    inner = MagicMock()
+    inner.tag_text = text
+    t = MagicMock()
+    t.is_user_generated_tag.return_value = True
+    t.get_user_generated_tag.return_value = inner
+    return t
+
+
 def _path_to_tags(path: str, tag_texts: list[str]) -> MagicMock:
-    """Build a fake PathToTags result. tags is a list of objects with .tag_text."""
+    """Build a fake PathToTags result."""
     pt = MagicMock()
     pt.path = path
-    pt.tags = [MagicMock(tag_text=t) for t in tag_texts]
+    pt.tags = [_fake_tag(t) for t in tag_texts]
     return pt
 
 
