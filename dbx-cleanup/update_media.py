@@ -11,6 +11,9 @@ import csv as csv_lib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dropbox.exceptions import ApiError
+
+from dbx_client import with_retry
 from dbx_media import normalize_tag
 
 
@@ -133,5 +136,42 @@ def validate_tag_normalization_and_count(
             code="TOO_MANY_TAGS",
             message=("Dropbox allows max 20 tags per file. " + "; ".join(msg_parts)),
             offending_paths=tuple(p for p, _ in too_many),
+        ))
+    return problems
+
+
+def validate_paths_and_hashes(client, rows: list[EditedRow]) -> list[ValidationProblem]:
+    """For each row that will result in a Dropbox action (tag-add or delete),
+    verify the path exists AND content_hash matches what's in the CSV.
+    Combined into one API call per row (files_get_metadata)."""
+    missing: list[str] = []
+    changed: list[str] = []
+    for row in rows:
+        if not row.marked_delete and not row.new_tags:
+            continue  # no-op row, skip API call
+        try:
+            meta = with_retry(lambda r=row: client.files_get_metadata(r.path))
+        except ApiError as exc:
+            if "not_found" in str(exc.error):
+                missing.append(row.path)
+                continue
+            raise
+        if getattr(meta, "content_hash", None) != row.content_hash:
+            changed.append(row.path)
+
+    problems: list[ValidationProblem] = []
+    if missing:
+        problems.append(ValidationProblem(
+            code="PATH_NOT_FOUND",
+            message=(f"{len(missing)} path(s) no longer exist in Dropbox. "
+                     "Re-run get_images.py / get_videos.py to refresh the batch."),
+            offending_paths=tuple(missing),
+        ))
+    if changed:
+        problems.append(ValidationProblem(
+            code="HASH_CHANGED",
+            message=(f"{len(changed)} file(s) have changed since the scan. "
+                     "Re-run get_images.py / get_videos.py to refresh."),
+            offending_paths=tuple(changed),
         ))
     return problems

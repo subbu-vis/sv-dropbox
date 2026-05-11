@@ -160,3 +160,52 @@ def test_validate_tag_normalizes_before_validating() -> None:
     rows = [_row("/a.jpg", ["#Diwali 2019", "Seema"])]
     problems = validate_tag_normalization_and_count(rows)
     assert all(p.code != "INVALID_TAG" for p in problems)
+
+
+from unittest.mock import MagicMock
+from dropbox.exceptions import ApiError
+
+from update_media import validate_paths_and_hashes
+
+
+def test_validate_paths_and_hashes_all_ok() -> None:
+    client = MagicMock()
+    # Each get_metadata returns the matching hash for the path.
+    def _meta(path: str) -> MagicMock:
+        m = MagicMock(); m.content_hash = {"/a.jpg": "h1", "/b.jpg": "h2"}[path]; return m
+    client.files_get_metadata.side_effect = _meta
+    rows = [_row("/a.jpg", ["x"]), _row("/b.jpg", ["y"])]
+    rows = [EditedRow(r.path, {"/a.jpg": "h1", "/b.jpg": "h2"}[r.path],
+                      r.filename, r.existing_tags, r.new_tags, r.marked_delete)
+            for r in rows]
+    assert validate_paths_and_hashes(client, rows) == []
+
+
+def test_validate_paths_path_not_found() -> None:
+    client = MagicMock()
+    client.files_get_metadata.side_effect = ApiError(
+        "req-id", MagicMock(__str__=lambda self: "path/not_found"), "user", "user")
+    rows = [EditedRow("/missing.jpg", "h", "missing.jpg", [], ["x"], False)]
+    problems = validate_paths_and_hashes(client, rows)
+    assert len(problems) == 1
+    assert problems[0].code == "PATH_NOT_FOUND"
+    assert "/missing.jpg" in problems[0].offending_paths
+
+
+def test_validate_paths_hash_changed() -> None:
+    client = MagicMock()
+    meta = MagicMock(); meta.content_hash = "different_hash"
+    client.files_get_metadata.return_value = meta
+    rows = [EditedRow("/a.jpg", "csv_hash", "a.jpg", [], ["x"], False)]
+    problems = validate_paths_and_hashes(client, rows)
+    assert len(problems) == 1
+    assert problems[0].code == "HASH_CHANGED"
+
+
+def test_validate_paths_skips_unmarked_unchanged_rows() -> None:
+    """A row with no new_tags and no delete flag is a no-op — skip the API call."""
+    client = MagicMock()
+    rows = [EditedRow("/a.jpg", "h", "a.jpg", [], [], False)]
+    problems = validate_paths_and_hashes(client, rows)
+    assert problems == []
+    assert client.files_get_metadata.call_count == 0
