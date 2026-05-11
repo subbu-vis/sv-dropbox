@@ -229,40 +229,75 @@ from dbx_client import MissingTokenError, get_client, load_media_config, load_to
 from dbx_media import classify_media, fetch_existing_tags, fetch_thumbnail, fold_to_folders
 
 
-def _walk_candidates(
+def _walk_and_collect_untagged(
     client,
     root: str,
     photo_exts: frozenset[str],
     video_exts: frozenset[str],
     kind: Literal["image", "video"],
     ignored_folders: tuple[str, ...],
-) -> list[tuple[str, str]]:
-    """Walk Dropbox under `root`, return [(path, content_hash), ...] for files
-    matching `kind`, excluding hidden segments and ignored folders."""
+    target: int,
+) -> tuple[list[str], dict[str, str]]:
+    """Walk Dropbox under `root` page by page. For each page, classify entries
+    as photos/videos, fetch their existing tags, and accumulate untagged paths.
+
+    Stops as soon as we have at least `target` untagged paths OR the walk is
+    exhausted. Avoids the slow "walk every file in the account before filtering"
+    pattern.
+
+    Returns (untagged_paths, hash_by_path). Both ordered by walk traversal."""
     want = "photo" if kind == "image" else "video"
+    kind_label = "photos" if kind == "image" else "videos"
     list_path = "" if root == "/" else root.rstrip("/")
-    out: list[tuple[str, str]] = []
+
+    untagged: list[str] = []
+    hash_by_path: dict[str, str] = {}
+    files_walked = 0
+    candidates_checked = 0
+
     result: ListFolderResult = with_retry(
         lambda: client.files_list_folder(list_path, recursive=True)
     )
     while True:
+        # 1. Filter this page to media-classified candidates.
+        page_candidates: list[tuple[str, str]] = []
         for entry in result.entries:
             if not isinstance(entry, FileMetadata):
                 continue
             if entry.content_hash is None:
                 continue
+            files_walked += 1
             if any(seg.startswith(".") for seg in entry.path_display.split("/")):
                 continue
             path_lower = entry.path_display.lower()
             if any(path_lower == f or path_lower.startswith(f + "/") for f in ignored_folders):
                 continue
             if classify_media(entry.path_display, photo_exts, video_exts) == want:
-                out.append((entry.path_display, entry.content_hash))
+                page_candidates.append((entry.path_display, entry.content_hash))
+
+        # 2. Tag-lookup this page's candidates and accumulate untagged.
+        if page_candidates:
+            tags_by_path = fetch_existing_tags(client, [p for p, _ in page_candidates])
+            for p, h in page_candidates:
+                candidates_checked += 1
+                if not tags_by_path.get(p):
+                    untagged.append(p)
+                    hash_by_path[p] = h
+
+        print(f"  walked {files_walked} files, checked {candidates_checked} {kind_label}, "
+              f"{len(untagged)} untagged so far...")
+
+        # 3. Early exit if we hit the target.
+        if len(untagged) >= target:
+            print(f"  reached batch target ({target}); stopping walk early.")
+            break
         if not result.has_more:
+            print(f"  walk complete (scanned every {kind_label[:-1]} in scope).")
             break
         cursor = result.cursor
         result = with_retry(lambda c=cursor: client.files_list_folder_continue(c))
-    return out
+
+    return untagged, hash_by_path
 
 
 def _write_empty_html(mc, kind: Literal["image", "video"]) -> int:
@@ -300,28 +335,19 @@ def run(kind: Literal["image", "video"]) -> int:
     except AuthError as exc:
         print(f"Dropbox auth failed: {exc}.", file=sys.stderr); return 1
 
-    print(f"Walking Dropbox under {root}...")
-    candidates = _walk_candidates(client, root, mc.photo_extensions, mc.video_extensions,
-                                   kind, mc.ignored_folders)
-    print(f"  found {len(candidates)} candidate {'photos' if kind == 'image' else 'videos'}")
-
-    if not candidates:
-        return _write_empty_html(mc, kind)
-
-    print("Looking up existing tags...")
-    paths = [p for p, _ in candidates]
-    tags_by_path = fetch_existing_tags(client, paths)
-    untagged_paths = filter_untagged(paths, tags_by_path)
-    print(f"  {len(untagged_paths)} untagged")
+    print(f"Walking Dropbox under {root} (streaming — stops once {mc.batch_size} "
+          f"untagged found)...")
+    untagged_paths, hash_by_path = _walk_and_collect_untagged(
+        client, root, mc.photo_extensions, mc.video_extensions, kind,
+        mc.ignored_folders, target=mc.batch_size,
+    )
 
     if not untagged_paths:
         return _write_empty_html(mc, kind)
 
-    # Map back to (path, content_hash) only for untagged.
-    hash_by_path = {p: h for p, h in candidates}
     folded = fold_to_folders(untagged_paths)
     selected_paths = select_batch(folded, mc.batch_size)
-    print(f"  selected {len(selected_paths)} for this batch (batch_size={mc.batch_size})")
+    print(f"Selected {len(selected_paths)} for this batch (batch_size={mc.batch_size}).")
 
     print("Fetching thumbnails...")
     entries: list[BatchEntry] = []
@@ -337,7 +363,9 @@ def run(kind: Literal["image", "video"]) -> int:
             path=p,
             filename=p.rsplit("/", 1)[-1],
             content_hash=hash_by_path[p],
-            existing_tags=tags_by_path.get(p, []),
+            # Selected paths are untagged by construction (filter happens during
+            # the walk). The HTML will show "(none)" for the existing-tags column.
+            existing_tags=[],
             thumbnail_bytes=thumb,
         ))
         if i % 10 == 0:
