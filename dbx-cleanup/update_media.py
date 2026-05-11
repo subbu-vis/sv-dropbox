@@ -175,3 +175,198 @@ def validate_paths_and_hashes(client, rows: list[EditedRow]) -> list[ValidationP
             offending_paths=tuple(changed),
         ))
     return problems
+
+
+# ---------------------------------------------------------------------------
+# Step 3: ExecutionSummary, write_error_log, execute_actions
+# ---------------------------------------------------------------------------
+
+from datetime import datetime
+
+from dropbox.exceptions import AuthError, DropboxException
+
+from dbx_media import apply_tags, merge_tagged, merge_deleted
+
+
+@dataclass(frozen=True)
+class ExecutionSummary:
+    tagged_count: int
+    deleted_count: int
+    skipped_count: int
+    error_count: int
+    tags_added_total: int
+    log_path: Path
+
+
+AUDIT_HEADER = ["timestamp", "path", "action", "tags_added",
+                "tags_skipped_already_present", "dropbox_response"]
+
+
+def write_error_log(problems: list[ValidationProblem], log_path: Path) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("w") as f:
+        f.write(f"Pre-flight validation failed at {datetime.now().isoformat()}\n")
+        f.write("No Dropbox writes were performed.\n\n")
+        for p in problems:
+            f.write(f"[{p.code}] {p.message}\n")
+            for path in p.offending_paths:
+                f.write(f"  - {path}\n")
+            f.write("\n")
+
+
+def execute_actions(
+    client,
+    rows: list[EditedRow],
+    archive: dict[str, dict],
+    log_path: Path,
+) -> ExecutionSummary:
+    """For each row: delete OR add new tags (deduped) OR skip.
+    Updates the archive dict in place for successful actions.
+    Writes one audit-log row per attempt."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    tagged = 0
+    deleted = 0
+    skipped = 0
+    errors = 0
+    tags_added_total = 0
+
+    with log_path.open("w", newline="") as f:
+        writer = csv_lib.writer(f)
+        writer.writerow(AUDIT_HEADER)
+        for row in rows:
+            ts = datetime.now().isoformat()
+            if row.marked_delete:
+                try:
+                    with_retry(lambda r=row: client.files_delete_v2(r.path))
+                    merge_deleted(archive, row.path, ts)
+                    deleted += 1
+                    writer.writerow([ts, row.path, "deleted", "", "",
+                                     "moved to recycle bin"])
+                    print(f"  deleted: {row.path}")
+                except AuthError:
+                    raise
+                except DropboxException as exc:
+                    errors += 1
+                    writer.writerow([ts, row.path, "error", "", "", str(exc)])
+                    print(f"  ERROR  : {row.path} ({exc})")
+            elif row.new_tags:
+                # Normalize new tags (validators already verified these pass).
+                # Dedupe against existing.
+                normalized_new = [normalize_tag(t) for t in row.new_tags]
+                already = set(row.existing_tags)
+                to_add = [t for t in normalized_new if t not in already]
+                already_present = [t for t in normalized_new if t in already]
+                try:
+                    apply_tags(client, row.path, to_add)
+                    # Archive merge with union (includes both existing and new).
+                    merge_tagged(archive, row.path, row.content_hash,
+                                 sorted(set(row.existing_tags) | set(normalized_new)), ts)
+                    tagged += 1
+                    tags_added_total += len(to_add)
+                    writer.writerow([ts, row.path, "tagged",
+                                     "|".join(to_add), "|".join(already_present),
+                                     "ok"])
+                    print(f"  tagged : {row.path}  +[{', '.join(to_add)}]")
+                except AuthError:
+                    raise
+                except DropboxException as exc:
+                    errors += 1
+                    writer.writerow([ts, row.path, "error",
+                                     "|".join(to_add), "|".join(already_present),
+                                     str(exc)])
+                    print(f"  ERROR  : {row.path} ({exc})")
+            else:
+                skipped += 1
+                writer.writerow([ts, row.path, "skipped", "", "", ""])
+
+    return ExecutionSummary(
+        tagged_count=tagged, deleted_count=deleted,
+        skipped_count=skipped, error_count=errors,
+        tags_added_total=tags_added_total, log_path=log_path,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 4: run() orchestrator
+# ---------------------------------------------------------------------------
+
+import argparse
+import sys
+
+from typing import Literal
+
+from dbx_client import MissingTokenError, get_client, load_media_config, load_token
+from dbx_media import load_archive, save_archive
+
+
+def run(kind: Literal["image", "video"]) -> int:
+    parser = argparse.ArgumentParser(
+        description=f"Apply edited {'image' if kind == 'image' else 'video'} tags to Dropbox."
+    )
+    parser.add_argument("--config", default="config.ini")
+    parser.add_argument("--csv", required=True,
+                        help="Path to the .edited.csv exported from the HTML review page.")
+    args = parser.parse_args()
+
+    try:
+        mc = load_media_config(Path(args.config))
+        token = load_token()
+        client = get_client(token)
+    except FileNotFoundError as exc:
+        print(f"Config error: {exc}", file=sys.stderr); return 1
+    except MissingTokenError as exc:
+        print(f"Token error: {exc}", file=sys.stderr); return 1
+    except AuthError as exc:
+        print(f"Dropbox auth failed: {exc}.", file=sys.stderr); return 1
+
+    try:
+        rows = parse_csv(Path(args.csv))
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"CSV error: {exc}", file=sys.stderr); return 1
+
+    actionable = sum(1 for r in rows if r.marked_delete or r.new_tags)
+    if actionable == 0:
+        print("No rows with new tags or delete marks. Nothing to do.")
+        return 0
+
+    print(f"Pre-flight validation on {len(rows)} rows ({actionable} actionable)...")
+    problems: list[ValidationProblem] = []
+    problems.extend(validate_conflict_tag_and_delete(rows))
+    problems.extend(validate_max_rows(rows, mc.batch_size))
+    problems.extend(validate_tag_normalization_and_count(rows))
+    problems.extend(validate_paths_and_hashes(client, rows))
+
+    if problems:
+        ts = datetime.now().strftime("%Y-%m-%d-%H%M")
+        log_path = mc.log_dir / f"error-{ts}.log"
+        write_error_log(problems, log_path)
+        print(f"\nValidation failed with {len(problems)} problem(s). See {log_path}")
+        for p in problems:
+            print(f"  [{p.code}] {p.message}")
+        return 2
+
+    print("All validations passed.")
+    confirm = input(f"\nAbout to apply {actionable} change(s) to Dropbox. Type 'yes': ")
+    if confirm.strip() != "yes":
+        print("Aborted by user."); return 1
+
+    archive = load_archive(mc.tag_archive_path)
+    ts = datetime.now().strftime("%Y-%m-%d-%H%M")
+    audit_path = mc.log_dir / f"tag-log-{ts}.csv"
+    try:
+        summary = execute_actions(client, rows, archive, audit_path)
+    except AuthError as exc:
+        print(f"\nDropbox auth failed mid-batch: {exc}. Audit log at {audit_path}.",
+              file=sys.stderr)
+        save_archive(mc.tag_archive_path, archive)  # save partial progress
+        return 1
+
+    save_archive(mc.tag_archive_path, archive)
+    print(f"\nDone. Tagged: {summary.tagged_count} "
+          f"({summary.tags_added_total} tags added), "
+          f"Deleted: {summary.deleted_count}, "
+          f"Skipped: {summary.skipped_count}, "
+          f"Errors: {summary.error_count}")
+    print(f"Audit log: {summary.log_path}")
+    print(f"Archive:   {mc.tag_archive_path} ({len(archive)} paths total)")
+    return 0 if summary.error_count == 0 else 3

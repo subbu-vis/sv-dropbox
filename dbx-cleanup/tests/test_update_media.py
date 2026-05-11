@@ -209,3 +209,88 @@ def test_validate_paths_skips_unmarked_unchanged_rows() -> None:
     problems = validate_paths_and_hashes(client, rows)
     assert problems == []
     assert client.files_get_metadata.call_count == 0
+
+
+from update_media import execute_actions, write_error_log
+
+
+def test_execute_tags_new_tag_only(tmp_path: Path) -> None:
+    """Row with new_tags only -> apply_tags called with deduped list."""
+    client = MagicMock()
+    archive: dict[str, dict] = {}
+    rows = [EditedRow("/a.jpg", "h", "a.jpg",
+                      existing_tags=["already"],
+                      new_tags=["already", "seema"],  # already dup, only seema new
+                      marked_delete=False)]
+    audit_path = tmp_path / "tag-log.csv"
+    summary = execute_actions(client, rows, archive, audit_path)
+    # apply_tags should have been called for "seema" only
+    client.files_tags_add.assert_called_once_with("/a.jpg", "seema")
+    assert summary.tagged_count == 1
+    assert summary.deleted_count == 0
+    assert summary.skipped_count == 0
+    assert summary.error_count == 0
+    # Archive should have the merged tags
+    assert set(archive["/a.jpg"]["tags"]) == {"already", "seema"}
+    # Audit log should exist with a tagged row
+    assert audit_path.exists()
+    contents = audit_path.read_text()
+    assert "/a.jpg" in contents
+    assert "tagged" in contents
+
+
+def test_execute_deletes_a_row(tmp_path: Path) -> None:
+    client = MagicMock()
+    archive = {"/a.jpg": {"content_hash": "h", "tags": ["x"], "last_updated": "older"}}
+    rows = [EditedRow("/a.jpg", "h", "a.jpg", ["x"], [], marked_delete=True)]
+    audit_path = tmp_path / "tag-log.csv"
+    summary = execute_actions(client, rows, archive, audit_path)
+    client.files_delete_v2.assert_called_once_with("/a.jpg")
+    assert summary.deleted_count == 1
+    assert "deleted_at" in archive["/a.jpg"]
+
+
+def test_execute_skips_noop_row(tmp_path: Path) -> None:
+    client = MagicMock()
+    archive: dict[str, dict] = {}
+    rows = [EditedRow("/a.jpg", "h", "a.jpg", [], [], marked_delete=False)]
+    audit_path = tmp_path / "tag-log.csv"
+    summary = execute_actions(client, rows, archive, audit_path)
+    assert summary.skipped_count == 1
+    assert client.files_tags_add.call_count == 0
+    assert client.files_delete_v2.call_count == 0
+
+
+def test_execute_continues_on_per_row_error(tmp_path: Path) -> None:
+    """One failing tag_add doesn't abort the rest."""
+    client = MagicMock()
+    # First call raises, second succeeds.
+    client.files_tags_add.side_effect = [
+        ApiError("rid", MagicMock(__str__=lambda self: "tag/conflict"), "u", "u"),
+        None,
+    ]
+    archive: dict[str, dict] = {}
+    rows = [
+        EditedRow("/a.jpg", "h", "a.jpg", [], ["fail"], False),
+        EditedRow("/b.jpg", "h", "b.jpg", [], ["ok"], False),
+    ]
+    audit_path = tmp_path / "tag-log.csv"
+    summary = execute_actions(client, rows, archive, audit_path)
+    assert summary.error_count == 1
+    assert summary.tagged_count == 1
+    assert "/b.jpg" in archive  # success → archive updated
+    assert "/a.jpg" not in archive  # failure → archive NOT updated
+
+
+def test_write_error_log(tmp_path: Path) -> None:
+    log_path = tmp_path / "error.log"
+    problems = [
+        ValidationProblem(code="X", message="something happened",
+                          offending_paths=("/a.jpg", "/b.jpg")),
+    ]
+    write_error_log(problems, log_path)
+    contents = log_path.read_text()
+    assert "Pre-flight validation failed" in contents
+    assert "[X]" in contents
+    assert "/a.jpg" in contents
+    assert "/b.jpg" in contents
