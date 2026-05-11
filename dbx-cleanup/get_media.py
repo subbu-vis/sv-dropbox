@@ -189,7 +189,7 @@ def build_html(
         parts.append(f'    <h2>{_esc(folder)} <small>({len(group)} files)</small></h2>\n')
         parts.append('    <div class="bulk">\n')
         parts.append('      Apply to all in folder:\n')
-        parts.append('      <input class="bulk-tags" placeholder="e.g. event-2019, family">\n')
+        parts.append('      <input class="bulk-tags" placeholder="e.g. event_2019, family">\n')
         parts.append('      <button class="bulk-apply">Apply</button>\n')
         parts.append('    </div>\n')
         for e in group:

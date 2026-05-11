@@ -102,7 +102,7 @@ def validate_tag_normalization_and_count(
     rows: list[EditedRow],
 ) -> list[ValidationProblem]:
     """For each row's new_tags:
-      1. Normalize each (strips #, lowercases, spaces->hyphens, validates)
+      1. Normalize each (strips #, lowercases, spaces/hyphens -> underscores, validates)
       2. Compute the would-be union with existing_tags
       3. Reject if any normalization fails OR if union size > 20.
     Returns problems with row context."""
@@ -126,7 +126,7 @@ def validate_tag_normalization_and_count(
         msg_parts = [f"{p}: {t!r}" for p, t in invalid]
         problems.append(ValidationProblem(
             code="INVALID_TAG",
-            message=("Tags failing Dropbox's rules (a-z, 0-9, hyphens; 1-32 chars). "
+            message=("Tags failing Dropbox's rules (a-z, 0-9, underscores; 1-32 chars). "
                      "Offending: " + "; ".join(msg_parts)),
             offending_paths=tuple({p for p, _ in invalid}),
         ))

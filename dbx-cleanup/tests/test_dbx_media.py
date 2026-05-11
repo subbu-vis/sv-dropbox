@@ -34,8 +34,8 @@ def test_normalize_tag_strips_hash_and_lowercases() -> None:
     assert normalize_tag("#Diwali") == "diwali"
 
 
-def test_normalize_tag_spaces_to_hyphens() -> None:
-    assert normalize_tag("Diwali 2019") == "diwali-2019"
+def test_normalize_tag_spaces_to_underscores() -> None:
+    assert normalize_tag("Diwali 2019") == "diwali_2019"
 
 
 def test_normalize_tag_strips_whitespace() -> None:
@@ -43,11 +43,17 @@ def test_normalize_tag_strips_whitespace() -> None:
 
 
 def test_normalize_tag_collapses_multiple_spaces() -> None:
-    assert normalize_tag("a   b   c") == "a-b-c"
+    assert normalize_tag("a   b   c") == "a_b_c"
 
 
-def test_normalize_tag_keeps_existing_hyphens() -> None:
-    assert normalize_tag("diwali-2019") == "diwali-2019"
+def test_normalize_tag_converts_hyphens_to_underscores() -> None:
+    """Dropbox's tag validator rejects hyphens. We accept hyphen input but
+    convert it to underscores so the user can type `diwali-2019` naturally."""
+    assert normalize_tag("diwali-2019") == "diwali_2019"
+
+
+def test_normalize_tag_keeps_existing_underscores() -> None:
+    assert normalize_tag("diwali_2019") == "diwali_2019"
 
 
 def test_normalize_tag_rejects_invalid_chars() -> None:

@@ -242,7 +242,7 @@ Five additional scripts let you assign native Dropbox tags to photos and videos 
 | `PATH_NOT_FOUND` | File moved/renamed/deleted since the batch was generated |
 | `HASH_CHANGED` | File content changed since the batch was generated |
 | `CONFLICT_TAG_AND_DELETE` | A single row has both `new_tags` and `delete=x` |
-| `INVALID_TAG` | A tag fails Dropbox's rules (a-z, 0-9, hyphens, 1-32 chars) after normalization |
+| `INVALID_TAG` | A tag fails Dropbox's rules (a-z, 0-9, underscores, 1-32 chars) after normalization |
 | `TOO_MANY_TAGS` | Existing + new tags would exceed Dropbox's 20-per-file cap |
 | `EXCEEDS_MAX_ROWS` | The CSV has more rows than `[media].batch_size` |
 
@@ -251,15 +251,15 @@ All validations run to completion; if any fails the whole batch aborts (exit 2).
 After the run, three artifacts:
 - `output/tag-archive.json` — the persistent local archive, keyed by Dropbox path. Survives a future migration away from Dropbox.
 - `logs/tag-log-YYYY-MM-DD-HHMM.csv` — per-row audit (timestamp, path, action, tags added/skipped, response).
-- The Dropbox files themselves now carry their new tags, searchable in the web UI as `tag:diwali-2019`.
+- The Dropbox files themselves now carry their new tags, searchable in the web UI as `tag:diwali_2019`.
 
 ### Tag input format
 
 Tags in the HTML are comma-separated. The script normalizes each one before sending to Dropbox:
 - Leading `#` is stripped (so `#seema` and `seema` both work)
 - Lowercased
-- Internal whitespace runs become single hyphens (so `Diwali 2019` → `diwali-2019`)
-- Validated: a-z, 0-9, hyphens only; 1-32 chars
+- Internal whitespace AND hyphens become single underscores (so `Diwali 2019` and `diwali-2019` both → `diwali_2019`). Dropbox's tag validator rejects hyphens — only `a-z`, `0-9`, and `_` are permitted.
+- Validated: a-z, 0-9, underscores only; 1-32 chars
 
 Anything still failing after normalization is rejected at pre-flight validation; the original value is named in the error log so you can fix the CSV and re-run.
 

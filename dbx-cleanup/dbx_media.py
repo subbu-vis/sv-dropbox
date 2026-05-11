@@ -15,10 +15,12 @@ from typing import Literal
 
 # --- 1. Pure helpers -------------------------------------------------------
 
-# Dropbox native tag rules (per the API docs):
+# Dropbox native tag rules (verified empirically against the SDK validator,
+# which uses pattern `[\w]+` i.e. [a-zA-Z0-9_]+ — hyphens are NOT allowed):
 #   - 1 to 32 characters
-#   - lowercase a-z, 0-9, and hyphens only
-TAG_REGEX = re.compile(r"^[a-z0-9-]{1,32}$")
+#   - lowercase a-z, 0-9, and underscores only (we lowercase on normalize for
+#     UI-consistency even though the SDK pattern would accept uppercase)
+TAG_REGEX = re.compile(r"^[a-z0-9_]{1,32}$")
 
 
 def classify_media(
@@ -43,18 +45,22 @@ def classify_media(
 
 def normalize_tag(raw: str) -> str:
     """Normalize user tag input to Dropbox's native-tag format.
-    Strips leading '#', lowercases, replaces runs of whitespace with single hyphens,
-    strips surrounding whitespace, then validates.
+    Strips leading '#', lowercases, replaces runs of whitespace AND hyphens
+    with single underscores (Dropbox tags don't allow hyphens), strips
+    surrounding whitespace, then validates.
     Raises ValueError(f"invalid tag: {raw!r}") if the result doesn't match
-    a-z0-9- and 1-32 chars."""
+    a-z0-9_ and 1-32 chars."""
     s = raw.strip()
     if s.startswith("#"):
         s = s[1:]
     s = s.lower()
-    s = re.sub(r"\s+", "-", s)
+    # Treat hyphens like whitespace — both collapse into single underscores.
+    # This lets users freely type "diwali-2019" or "diwali 2019" and get
+    # the same result.
+    s = re.sub(r"[\s-]+", "_", s)
     if not TAG_REGEX.fullmatch(s):
         raise ValueError(f"invalid tag: {raw!r} -> {s!r} "
-                         f"(must be 1-32 chars of a-z, 0-9, and hyphens)")
+                         f"(must be 1-32 chars of a-z, 0-9, and underscores)")
     return s
 
 

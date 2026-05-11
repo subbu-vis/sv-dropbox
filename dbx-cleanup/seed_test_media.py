@@ -67,8 +67,8 @@ def main() -> int:
     upload(client, f"{ROOT}/other/doc.pdf", b"%PDF-1.4\n%minimal\n")
 
     # Pre-tag photo3 so it gets excluded from the next get_images batch.
-    print("\nPre-tagging /eventA/photo3.png with 'already-tagged'...")
-    with_retry(lambda: client.files_tags_add(f"{ROOT}/eventA/photo3.png", "already-tagged"))
+    print("\nPre-tagging /eventA/photo3.png with 'already_tagged'...")
+    with_retry(lambda: client.files_tags_add(f"{ROOT}/eventA/photo3.png", "already_tagged"))
 
     print("\nSeed complete. Now run:")
     print(f"  python count_media.py --config config.test.ini --root {ROOT}")
