@@ -108,8 +108,11 @@ CSV_HEADER = ["group_id", "filename", "size_bytes", "path", "content_hash",
 
 def write_csv(groups: list[list[FileEntry]], out_path: Path) -> None:
     """Write `groups` as a CSV at `out_path`. Header row + one row per FileEntry,
-    with a blank row separator between groups. `delete` column is empty for the
-    user to fill in. Empty `groups` produces a header-only file."""
+    with a blank row separator between groups. Within each group the first row
+    (after case-insensitive path sort) is left unmarked and every subsequent row
+    is pre-marked with 'x' in the `delete` column, so the default action is to
+    keep one copy and delete the rest. The user can edit before running
+    delete_duplicates.py. Empty `groups` produces a header-only file."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", newline="") as f:
         writer = csv.writer(f)
@@ -117,10 +120,11 @@ def write_csv(groups: list[list[FileEntry]], out_path: Path) -> None:
         for idx, group in enumerate(groups, start=1):
             # Case-fold the sort key so siblings with mixed-case parent folders
             # (Dropbox is case-insensitive) appear adjacent.
-            for entry in sorted(group, key=lambda e: e.path.lower()):
+            for row_idx, entry in enumerate(sorted(group, key=lambda e: e.path.lower())):
                 writer.writerow([
                     idx, entry.name, entry.size, entry.path,
-                    entry.content_hash, entry.server_modified, "",
+                    entry.content_hash, entry.server_modified,
+                    "" if row_idx == 0 else "x",
                 ])
             # blank row between groups (but not after the last one)
             if idx < len(groups):
@@ -247,7 +251,8 @@ def main() -> int:
     if not selected:
         print("(No duplicate groups found above the configured threshold.)")
     else:
-        print("Mark 'x' in the delete column for files to remove, then run:")
+        print("Review pre-marked 'x' rows (one copy per group is kept by default), "
+              "edit if needed, then run:")
         print(f"  python delete_duplicates.py --csv {out_path}")
     return 0
 
