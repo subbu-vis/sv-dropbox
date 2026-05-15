@@ -8,6 +8,7 @@ self-contained HTML review page.
 from __future__ import annotations
 
 import base64
+from collections import Counter
 import html as html_lib
 from dataclasses import dataclass
 from typing import Iterable, Literal
@@ -89,6 +90,15 @@ _HTML_TEMPLATE_HEAD = """\
     .meta input[type=text] {{ width: 100%; padding: 0.3rem; }}
     .existing {{ color: #666; }}
     .empty {{ color: #888; font-style: italic; padding: 2rem; text-align: center; }}
+    .tag-cloud {{ position: fixed; top: 5rem; right: 1rem; width: 180px;
+                  max-height: calc(100vh - 7rem); overflow-y: auto;
+                  padding: 0.6rem 0.8rem; background: #fafafa;
+                  border: 1px solid #ddd; border-radius: 4px; font-size: 0.85rem; }}
+    .tag-cloud h3 {{ font-size: 0.9rem; margin: 0 0 0.5rem; color: #444; }}
+    .tag-cloud ul {{ list-style: none; padding: 0; margin: 0; }}
+    .tag-cloud li {{ padding: 0.15rem 0; display: flex;
+                     justify-content: space-between; gap: 0.5rem; }}
+    .tag-cloud .count {{ color: #888; }}
   </style>
 </head>
 <body>
@@ -155,13 +165,26 @@ def build_html(
     entries: list[BatchEntry],
     kind: Literal["image", "video"],
     timestamp: str,
+    top_tags: list[tuple[str, int]] | None = None,
 ) -> str:
     """Render entries to a self-contained HTML page. Empty entries → friendly
-    'nothing to tag' message instead of a folder list."""
+    'nothing to tag' message instead of a folder list. `top_tags` is an optional
+    list of (tag, count) pairs already sorted desc; rendered as a sticky
+    right-side panel. Omitted/empty → no panel."""
     kind_label = "photos" if kind == "image" else "videos"
     title = f"Tag batch — {len(entries)} {kind_label} from {timestamp}"
 
     parts: list[str] = [_HTML_TEMPLATE_HEAD.format(title=_esc(title))]
+
+    if top_tags:
+        parts.append('  <aside class="tag-cloud">\n')
+        parts.append('    <h3>Top tags so far</h3>\n')
+        parts.append('    <ul>\n')
+        for tag, count in top_tags:
+            parts.append(f'      <li><span>{_esc(tag)}</span>'
+                         f'<span class="count">{count}</span></li>\n')
+        parts.append('    </ul>\n')
+        parts.append('  </aside>\n')
 
     if not entries:
         parts.append('  <p class="empty">No untagged ' + kind_label + ' in scope.</p>\n')
@@ -237,7 +260,7 @@ def _walk_and_collect_untagged(
     kind: Literal["image", "video"],
     ignored_folders: tuple[str, ...],
     target: int,
-) -> tuple[list[str], dict[str, str]]:
+) -> tuple[list[str], dict[str, str], Counter[str]]:
     """Walk Dropbox under `root` page by page. For each page, classify entries
     as photos/videos, fetch their existing tags, and accumulate untagged paths.
 
@@ -245,13 +268,17 @@ def _walk_and_collect_untagged(
     exhausted. Avoids the slow "walk every file in the account before filtering"
     pattern.
 
-    Returns (untagged_paths, hash_by_path). Both ordered by walk traversal."""
+    Returns (untagged_paths, hash_by_path, tag_counts). The first two are
+    ordered by walk traversal; tag_counts aggregates every tag occurrence seen
+    during the walk (one increment per (file, tag) pair). Sample is partial
+    when the walk exits early on the untagged-target."""
     want = "photo" if kind == "image" else "video"
     kind_label = "photos" if kind == "image" else "videos"
     list_path = "" if root == "/" else root.rstrip("/")
 
     untagged: list[str] = []
     hash_by_path: dict[str, str] = {}
+    tag_counts: Counter[str] = Counter()
     files_walked = 0
     candidates_checked = 0
 
@@ -280,9 +307,12 @@ def _walk_and_collect_untagged(
             tags_by_path = fetch_existing_tags(client, [p for p, _ in page_candidates])
             for p, h in page_candidates:
                 candidates_checked += 1
-                if not tags_by_path.get(p):
+                file_tags = tags_by_path.get(p) or []
+                if not file_tags:
                     untagged.append(p)
                     hash_by_path[p] = h
+                else:
+                    tag_counts.update(file_tags)
 
         print(f"  walked {files_walked} files, checked {candidates_checked} {kind_label}, "
               f"{len(untagged)} untagged so far...")
@@ -297,7 +327,7 @@ def _walk_and_collect_untagged(
         cursor = result.cursor
         result = with_retry(lambda c=cursor: client.files_list_folder_continue(c))
 
-    return untagged, hash_by_path
+    return untagged, hash_by_path, tag_counts
 
 
 def _write_empty_html(mc, kind: Literal["image", "video"]) -> int:
@@ -337,7 +367,7 @@ def run(kind: Literal["image", "video"]) -> int:
 
     print(f"Walking Dropbox under {root} (streaming — stops once {mc.batch_size} "
           f"untagged found)...")
-    untagged_paths, hash_by_path = _walk_and_collect_untagged(
+    untagged_paths, hash_by_path, tag_counts = _walk_and_collect_untagged(
         client, root, mc.photo_extensions, mc.video_extensions, kind,
         mc.ignored_folders, target=mc.batch_size,
     )
@@ -373,7 +403,10 @@ def run(kind: Literal["image", "video"]) -> int:
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     file_ts = datetime.now().strftime("%Y-%m-%d-%H%M")
-    html = build_html(entries=entries, kind=kind, timestamp=timestamp)
+    html = build_html(
+        entries=entries, kind=kind, timestamp=timestamp,
+        top_tags=tag_counts.most_common(20),
+    )
 
     suffix = "images" if kind == "image" else "videos"
     out_path = mc.csv_output_dir / f"tag-batch-{suffix}-{file_ts}.html"
