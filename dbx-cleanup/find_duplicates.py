@@ -111,23 +111,29 @@ def write_csv(groups: list[list[FileEntry]], out_path: Path) -> None:
     with a blank row separator between groups. Within each group the first row
     (after case-insensitive path sort) is left unmarked and every subsequent row
     is pre-marked with 'x' in the `delete` column, so the default action is to
-    keep one copy and delete the rest. The user can edit before running
+    keep one copy and delete the rest. Groups are ordered by the parent folder of
+    that first row, so duplicate groups whose kept copy lives in the same folder
+    appear adjacent -- easier visual triage. The user can edit before running
     delete_duplicates.py. Empty `groups` produces a header-only file."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    # Pre-sort rows within each group (case-fold so mixed-case siblings cluster),
+    # then sort groups by the parent folder of the first row so groups sharing a
+    # folder land next to each other in the CSV.
+    ordered_groups = [sorted(g, key=lambda e: e.path.lower()) for g in groups]
+    ordered_groups.sort(key=lambda g: (g[0].path.rsplit("/", 1)[0].lower(),
+                                       g[0].path.lower()))
     with out_path.open("w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(CSV_HEADER)
-        for idx, group in enumerate(groups, start=1):
-            # Case-fold the sort key so siblings with mixed-case parent folders
-            # (Dropbox is case-insensitive) appear adjacent.
-            for row_idx, entry in enumerate(sorted(group, key=lambda e: e.path.lower())):
+        for idx, group in enumerate(ordered_groups, start=1):
+            for row_idx, entry in enumerate(group):
                 writer.writerow([
                     idx, entry.name, entry.size, entry.path,
                     entry.content_hash, entry.server_modified,
                     "" if row_idx == 0 else "x",
                 ])
             # blank row between groups (but not after the last one)
-            if idx < len(groups):
+            if idx < len(ordered_groups):
                 writer.writerow([])
 
 
